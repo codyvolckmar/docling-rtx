@@ -4,7 +4,7 @@
 
 One command turns your NVIDIA GPU into a private AI with an OpenAI-compatible API. Summon picks the model, weights and context that fit your card, verifies the download, keeps the port private and tests tool calling before it hands you the URL. No cloud, no API bill, nobody else's servers.
 
-![Summon model menu](docs/img/01-model-menu-a6000.png)
+![Summon: Nanbeige on llama.cpp, Qwen3.8 27B on Ollama](docs/img/summon-hero.png)
 
 ## Install
 
@@ -66,6 +66,7 @@ Then point any OpenAI-compatible client at `http://localhost:PORT/v1` (rented po
 |---|---|
 | ![24 GB card](docs/img/06-model-menu-3090.png) | ![Context menu](docs/img/03-context-menu.png) |
 | ![Weights menu](docs/img/04-weights-menu.png) | ![Dry run plan](docs/img/05-dry-run-plan.png) |
+| ![Ollama models](docs/img/09-ollama-menu.png) | ![Ollama plan](docs/img/10-ollama-plan.png) |
 
 Regenerate them with `python3 tools/termshot.py` (drives the real script in a pseudo-terminal).
 

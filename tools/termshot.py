@@ -2,7 +2,7 @@
 """Run a command in a pseudo-terminal, drive it with keystrokes and save PNG screenshots of the screen.
 
 Used to make the README / website screenshots of Summon's dry runs (real whiptail, real script):
-    python3 -I tools/termshot.py            # writes docs/img/*.png
+    python3 -I tools/termshot.py            # writes docs/img/*.png (summon-hero.png is composed separately)
 A tiny VT100/xterm emulator (just what whiptail/newt and plain colored output use) feeds a PIL renderer.
 """
 import os, pty, re, select, signal, struct, fcntl, termios, time, sys
@@ -355,4 +355,5 @@ if __name__ == '__main__':
     env = dict(base, SUMMON_GPU='NVIDIA RTX A6000:49140')
     run(f'cd {root}; clear; "{S}" --dry-run ollama 40000; sleep 30', env, [
         ('until', r'Ollama models', 25), ('shot', '09-ollama-menu.png', 'summon.sh --dry-run ollama 40000  (RTX A6000, 48 GB)'),
+        ('key', ENTER), ('until', r'Endpoint:', 15), ('shot', '10-ollama-plan.png', 'summon.sh --dry-run ollama 40000  (RTX A6000, 48 GB)'),
     ], out)

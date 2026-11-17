@@ -137,7 +137,7 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
 # The hf.co entries are faster-thinking Qwen3.8-27B derivatives (ThinkingCap: -37% thinking tokens, -0.86pp;
 # Swift 1.5: -58.5% median thinking, +0.35%). Both carry an MTP head and restrictive licences (PolyForm Small
 # Business; Swift Open License, free <= US$1M revenue). HF refs start OFF.
-# "rank|Q8 ref|Q4 ref|KV KB/token|fixed MB|caps|name|good at"   (rank "-" = your own / HF model)
+# "rank|Q8 ref|Q4 ref|KV KB/token|fixed MB|caps|name|good at"   (rank "-" = community / HF model, opt-in)
 OL_MODELS=(
   "1|qwen3.8:27b-q8_0|qwen3.8:27b-q4_K_M|64|0|TVR|Qwen3.8 27B|LCR.82 II20 hall 29% (lowest). Best all-rounder: coding, research, agentic, vision"
   "2|muse-glimmer:30b-q8_0|muse-glimmer:30b-q4_K_M|13|80|TVR|Muse Glimmer 30B|LCR.83 (top) II6 hall 84%. Long agent loops, tool use, failure recovery"
@@ -848,16 +848,16 @@ install_ollama() {
     local j=$1 qq=${Q[$1]:+Q${Q[$1]} }
     if (( MCTX[j] == 0 )); then echo "TOO BIG ~${GB[j]}G@64K"; else echo "${qq}~${GB[j]}G@$((MCTX[j]/1024))K"; fi
   }
-  # Checklist: tags are row numbers. Your models ON if they fit; curated only the recommended one ON.
+  # Checklist: tags are row numbers; only the recommended model starts ticked.
   local CHECKLIST=() st mark N H W ROWS COLS PICKS ONLY_PICKS="" t nums DEF j NOTE_W
   ROWS=$(tput lines 2>/dev/null || echo 40) COLS=$(tput cols 2>/dev/null || echo 120)
   W=$(( COLS - 4 )); (( W > 180 )) && W=180
   NOTE_W=$(( W - 76 )); (( NOTE_W < 20 )) && NOTE_W=20   # checkbox + row + rank + caps + name + size take ~70
   for i in "${!RANKS[@]}"; do
     st=OFF mark=""
-    [[ ${RANKS[i]} == - && ${MCTX[i]} != 0 && ${REF[i]} != hf.co/* ]] && st=ON   # HF pulls are opt-in
+    # Only the recommended model is pre-ticked: community / HF rows are opt-in (no surprise 20-30 GB downloads)
     (( i == REC )) && st=ON mark=" <<REC"
-    rk="#${RANKS[i]}"; [ "${RANKS[i]}" = - ] && rk="Mine"; [[ ${REF[i]} == hf.co/* ]] && rk="HF"
+    rk="#${RANKS[i]}"; [ "${RANKS[i]}" = - ] && rk="Comm"; [[ ${REF[i]} == hf.co/* ]] && rk="HF"
     CHECKLIST+=("$((i+1))" "$(printf '%-4s %s %-29.29s %-17s %.*s%s' "$rk" "${CAPS[i]}" "${MNAME[i]}" "$(fit_label $i)" "$NOTE_W" "${NOTE[i]}" "$mark")" "$st")
   done
   N=${#RANKS[@]}
@@ -872,7 +872,7 @@ install_ollama() {
     PICKS=$ONLY_PICKS
   elif (( HAS_WHIPTAIL && INTERACTIVE )); then
     PICKS=$(whiptail --backtitle "$BACKTITLE" --title "Ollama models - ${GPU_COUNT}x $GPU_NAME, $((FREE_MB/1024))GB VRAM" \
-      --checklist "$REC_TXT\nRanked for long-context coherence (AA LCR + hallucination). Caps: T=tools V=vision R=reasoning\nSize = weights + $KV_TYPE KV cache at the shown context. Space to select, Enter to confirm.\nRecommended + your own models are ON by default: deselect with Space, or use ONLY=1" \
+      --checklist "$REC_TXT\nRanked for long-context coherence (AA LCR + hallucination). Caps: T=tools V=vision R=reasoning\nSize = weights + $KV_TYPE KV cache at the shown context. Space to select, Enter to confirm.\nOnly the recommended model is ticked: add others with Space, or skip the menu with ONLY=1,3" \
       $H $W $(( H - 11 )) "${CHECKLIST[@]}" 3>&1 1>&2 2>&3) || PICKS=""
   else
     DEF=""
@@ -882,7 +882,7 @@ install_ollama() {
       echo "$REC_TXT"
       echo "Caps: T=tools V=vision R=reasoning. Size = weights + $KV_TYPE KV cache at the shown context."
       for i in "${!RANKS[@]}"; do
-        rk="#${RANKS[i]}"; [ "${RANKS[i]}" = - ] && rk="Mine"; [[ ${REF[i]} == hf.co/* ]] && rk="HF"
+        rk="#${RANKS[i]}"; [ "${RANKS[i]}" = - ] && rk="Comm"; [[ ${REF[i]} == hf.co/* ]] && rk="HF"
         printf '%2d) %-4s %s %-29.29s %-17s %s\n' "$((i+1))" "$rk" "${CAPS[i]}" "${MNAME[i]}" "$(fit_label $i)" "${NOTE[i]}"
       done
       read -rp "Model numbers to pull, comma-separated [${DEF:-none}]: " nums
