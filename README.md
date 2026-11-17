@@ -17,7 +17,7 @@ curl -fsSL https://codyvolckmar.github.io/summon/install.sh | bash
 **Windows 10/11** (PowerShell; runs Summon inside WSL 2 with your GPU):
 
 ```powershell
-irm https://codyvolckmar.github.io/summon/install.ps1 | iex
+irm https://raw.githubusercontent.com/codyvolckmar/summon/main/docs/install.ps1 | iex
 ```
 
 **Just looking?** The full wizard, nothing installed:

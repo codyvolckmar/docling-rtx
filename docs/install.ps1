@@ -1,8 +1,8 @@
 # Summon installer for Windows - AI, Open-source, Private Intelligence.
 #
-#   irm https://codyvolckmar.github.io/summon/install.ps1 | iex
-#   & ([scriptblock]::Create((irm https://codyvolckmar.github.io/summon/install.ps1))) --dry-run
-#   & ([scriptblock]::Create((irm https://codyvolckmar.github.io/summon/install.ps1))) ornith9b 40000
+#   irm https://raw.githubusercontent.com/codyvolckmar/summon/main/docs/install.ps1 | iex
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/codyvolckmar/summon/main/docs/install.ps1))) --dry-run
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/codyvolckmar/summon/main/docs/install.ps1))) ornith9b 40000
 #
 # Runs Summon inside WSL 2 (Ubuntu), which has direct access to your NVIDIA GPU. The AI endpoint is then
 # http://localhost:PORT/v1 on this PC (local mode: nothing else on your network can reach it).
