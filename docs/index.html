@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Summon - AI, Open-source, Private Intelligence</title>
+<meta name="description" content="One command turns your NVIDIA GPU into a private, OpenAI-compatible AI endpoint. Open models, no cloud, no API bill.">
+<meta property="og:title" content="Summon - AI, Open-source, Private Intelligence">
+<meta property="og:description" content="One command turns your NVIDIA GPU into a private AI endpoint: picks the model, weights and context that fit your card.">
+<meta property="og:image" content="img/01-model-menu-a6000.png">
+<style>
+  :root { --bg:#0e0a16; --panel:#171024; --line:#2e2244; --text:#e9e4f2; --dim:#a99fbd; --mag:#c77dff; --mag2:#e29bff; --cyan:#6fd6ea; --ok:#7be3a6; }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin:0; background: radial-gradient(1200px 600px at 50% -200px, #2a1745 0%, var(--bg) 60%) fixed, var(--bg);
+         color:var(--text); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif; }
+  a { color: var(--cyan); }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 22px; }
+  header { text-align:center; padding: 64px 0 24px; }
+  .logo { font: 700 clamp(48px, 11vw, 112px)/1 ui-monospace, "DejaVu Sans Mono", Menlo, monospace; letter-spacing: .14em;
+          background: linear-gradient(180deg, var(--mag2), #8f4fd8); -webkit-background-clip:text; background-clip:text; color:transparent;
+          text-shadow: 0 0 40px rgba(199,125,255,.25); margin: 0; }
+  .stars { color: var(--mag); letter-spacing: 1.2em; opacity:.8; font-size: 14px; }
+  .tag { color: var(--cyan); font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .35em; text-transform: uppercase; margin: 14px 0 0; }
+  .lede { max-width: 720px; margin: 22px auto 0; font-size: 19px; color: var(--text); }
+  .lede b { color: var(--mag2); }
+  section { margin: 46px 0; }
+  h2 { font-size: 26px; margin: 0 0 14px; }
+  h2 span { color: var(--mag); }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .card { background: var(--panel); border:1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
+  .card h3 { margin: 0 0 6px; font-size: 17px; }
+  .card p { margin: 0; color: var(--dim); }
+  .cmd { position: relative; background:#0a0712; border:1px solid var(--line); border-radius: 12px; padding: 14px 92px 14px 16px; margin: 10px 0;
+         font: 15px/1.5 ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace; color: var(--ok); overflow-x: auto; white-space: nowrap; }
+  .cmd .os { display:block; font: 600 12px/1 system-ui, sans-serif; color: var(--dim); text-transform: uppercase; letter-spacing: .12em; margin-bottom: 8px; }
+  .cmd button { position:absolute; right: 10px; top: 50%; transform: translateY(-50%); background: var(--mag); color:#140b20; border:0; border-radius: 8px;
+                padding: 7px 12px; font: 700 13px system-ui, sans-serif; cursor: pointer; }
+  .cmd button:hover { background: var(--mag2); }
+  .note { color: var(--dim); font-size: 14px; }
+  code { font: 14px ui-monospace, monospace; background:#21182f; padding: 1px 6px; border-radius: 6px; color: var(--mag2); }
+  table { width:100%; border-collapse: collapse; background: var(--panel); border:1px solid var(--line); border-radius: 14px; overflow:hidden; }
+  th, td { text-align:left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--mag2); font-weight: 600; background:#1d1430; }
+  tr:last-child td { border-bottom: 0; }
+  .shots { display:grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 18px; }
+  figure { margin:0; background: var(--panel); border:1px solid var(--line); border-radius: 14px; padding: 10px; }
+  figure img { width:100%; height:auto; display:block; border-radius: 8px; }
+  figcaption { color: var(--dim); font-size: 14px; padding: 8px 4px 2px; }
+  ol.steps { padding-left: 22px; } ol.steps li { margin: 6px 0; }
+  .warn { border-left: 3px solid var(--mag); padding: 10px 16px; background: #1a1229; border-radius: 0 10px 10px 0; color: var(--dim); }
+  footer { color: var(--dim); text-align:center; padding: 40px 0 60px; font-size: 14px; }
+  @media (max-width: 560px) { .shots { grid-template-columns: 1fr; } .cmd { padding-right: 16px; } .cmd button { position: static; transform:none; margin-top: 10px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="stars">✦ · ✦ · ✦</div>
+  <h1 class="logo">SUMMON</h1>
+  <p class="tag">AI · Open-source · Private · Intelligence</p>
+  <p class="lede">One command turns your NVIDIA GPU into a <b>private AI</b> with an OpenAI-compatible API.
+    Summon picks the model, weights and context that fit <b>your</b> card, verifies the download, keeps the port private
+    and tests tool calling before it hands you the URL. No cloud. No API bill. Nobody else's servers.</p>
+</header>
+
+<section id="install">
+  <h2><span>01</span> Summon it</h2>
+  <div class="cmd"><span class="os">Linux · Ubuntu / Debian · rented GPU pods</span><span id="c1">curl -fsSL https://codyvolckmar.github.io/summon/install.sh | bash</span><button data-copy="c1">Copy</button></div>
+  <div class="cmd"><span class="os">Windows 10 / 11 · PowerShell (runs in WSL 2)</span><span id="c2">irm https://codyvolckmar.github.io/summon/install.ps1 | iex</span><button data-copy="c2">Copy</button></div>
+  <div class="cmd"><span class="os">Just looking? Dry run: the full wizard, nothing installed</span><span id="c3">curl -fsSL https://codyvolckmar.github.io/summon/install.sh | bash -s -- --dry-run</span><button data-copy="c3">Copy</button></div>
+  <p class="note">No GPU on this machine? Preview any card: <code>SUMMON_GPU="RTX 3090:24576" ./summon.sh --dry-run</code>.
+    Prefer to read first? Good habit: <a href="https://github.com/codyvolckmar/summon/blob/main/summon.sh">summon.sh</a> ·
+    <a href="install.sh">install.sh</a> · <a href="install.ps1">install.ps1</a>.</p>
+</section>
+
+<section id="what">
+  <h2><span>02</span> What happens</h2>
+  <div class="grid">
+    <div class="card"><h3>Reads your GPU</h3><p>Free VRAM decides everything: which models fit, how much context, which weights. Nothing is guessed.</p></div>
+    <div class="card"><h3>Picks for you</h3><p>The best model that reaches 128K context on your card is pre-selected. Context first, then the most precise weights that still fit.</p></div>
+    <div class="card"><h3>Verifies</h3><p>Resumable downloads, exact byte counts, GGUF header checks, sha256 on request. Every layer stays on the GPU or it fails loudly.</p></div>
+    <div class="card"><h3>Stays private</h3><p>On your own PC it only listens on <code>127.0.0.1</code>. On a rented pod it's firewalled to the IP you SSH in from. No VPN needed.</p></div>
+    <div class="card"><h3>Tuned per model</h3><p>The model's own chat template, native tool calls, a host-RAM prompt cache, lossless n-gram speculative decoding.</p></div>
+    <div class="card"><h3>Proves it works</h3><p>Before handing you the URL, it makes a real tool call and checks it comes back in OpenAI format.</p></div>
+  </div>
+</section>
+
+<section id="models">
+  <h2><span>03</span> What you can summon</h2>
+  <table>
+    <tr><th>Model</th><th>Engine</th><th>Good at</th><th>24 GB (RTX 3090 / 4090)</th><th>48 GB (RTX A6000)</th></tr>
+    <tr><td><b>Nanbeige 4.3 33B</b></td><td>llama.cpp</td><td>Agentic coding. Top of the ≤40B class on Artificial Analysis (index 20).</td><td>up to 48K</td><td>128K (Q6_K) · 256K (Q3_K_M)</td></tr>
+    <tr><td><b>Ornith 1.5 35B</b></td><td>llama.cpp</td><td>Fast MoE, ~3B active per token. Vendor benchmarks only.</td><td>doesn't fit</td><td>256K with 8-bit weights</td></tr>
+    <tr><td><b>Ornith 1.5 9B</b></td><td>llama.cpp</td><td>Fast and light. Vendor benchmarks only.</td><td>256K with 8-bit weights</td><td>256K with 8-bit weights</td></tr>
+    <tr><td><b>Ollama models</b></td><td>Ollama</td><td>Qwen3.8 27B, Qwen3.6 35B-A3B, Gemma 4 31B, K2 Horizon, Muse Glimmer…</td><td>Qwen3.8 27B at 64K</td><td>most at 128K, 8-bit</td></tr>
+  </table>
+  <p class="note">Every model serves an OpenAI-compatible API: point any client (pi, Continue, Open WebUI, your own code) at
+    <code>http://localhost:PORT/v1</code>. One engine runs at a time; starting one stops the other.</p>
+</section>
+
+<section id="shots">
+  <h2><span>04</span> See it first</h2>
+  <p class="note">Real screens from <code>./summon.sh --dry-run</code>: the actual script and whiptail menus, nothing installed.</p>
+  <div class="shots">
+    <figure><a href="img/01-model-menu-a6000.png"><img src="img/01-model-menu-a6000.png" alt="Summon model menu on an RTX A6000" loading="lazy"></a><figcaption>48 GB card: Nanbeige pre-selected at 128K with Q6_K weights.</figcaption></figure>
+    <figure><a href="img/06-model-menu-3090.png"><img src="img/06-model-menu-3090.png" alt="Summon model menu on an RTX 3090" loading="lazy"></a><figcaption>24 GB card: Summon knows what won't fit and picks Ornith 9B.</figcaption></figure>
+    <figure><a href="img/03-context-menu.png"><img src="img/03-context-menu.png" alt="Context window menu" loading="lazy"></a><figcaption>Step 1: context window, with the best weights that fit at each length.</figcaption></figure>
+    <figure><a href="img/04-weights-menu.png"><img src="img/04-weights-menu.png" alt="Weights menu" loading="lazy"></a><figcaption>Step 2: weights. Total VRAM and relative speed for every option.</figcaption></figure>
+    <figure><a href="img/05-dry-run-plan.png"><img src="img/05-dry-run-plan.png" alt="Dry run plan" loading="lazy"></a><figcaption>The plan: exactly what it would install, download and start.</figcaption></figure>
+    <figure><a href="img/09-ollama-menu.png"><img src="img/09-ollama-menu.png" alt="Ollama model checklist" loading="lazy"></a><figcaption>Or pick several Ollama models, ranked with independent benchmark data.</figcaption></figure>
+  </div>
+</section>
+
+<section id="after">
+  <h2><span>05</span> After it's summoned</h2>
+  <ol class="steps">
+    <li>Point your tool at <code>http://localhost:PORT/v1</code> (rented pod: <code>http://&lt;pod-ip&gt;:PORT/v1</code>), any API key, and set its context window to the number Summon prints.</li>
+    <li>Switch models or weights any time: run <code>~/.summon/summon.sh</code> again.</li>
+    <li>New home IP on a rented pod: <code>~/.summon/summon.sh --lock</code>. Share on your LAN: <code>ALLOW_IP=192.168.1.0/24 ~/.summon/summon.sh</code>.</li>
+    <li>Remove everything: <code>~/.summon/summon.sh --uninstall</code>. All options: <code>--help</code>.</li>
+  </ol>
+</section>
+
+<section id="needs">
+  <h2><span>06</span> What you need</h2>
+  <div class="grid">
+    <div class="card"><h3>GPU</h3><p>NVIDIA with 24 GB+ for the long-context models (RTX 3090 / 4090 / A6000 / 6000 Ada). 48 GB unlocks Nanbeige at 128–256K.</p></div>
+    <div class="card"><h3>Linux</h3><p>Ubuntu or Debian (apt), NVIDIA driver installed, root or sudo. Summon installs Docker and the NVIDIA container toolkit if missing.</p></div>
+    <div class="card"><h3>Windows</h3><p>Windows 10 21H2+ or 11 with a current NVIDIA driver. The PowerShell installer sets up WSL 2 + Ubuntu and runs Summon there.</p></div>
+  </div>
+  <p class="warn">Honest notes: Summon is young. Its Nanbeige llama.cpp setup has served real agent work on rented RTX A6000 pods;
+    the full wizard, the Windows/WSL path and the Ornith models have only been tested with dry runs and simulated GPUs so far. Ornith's benchmarks are the vendor's own. Downloads are 6–38 GB.
+    Piping a script into your shell gives it root: read it first if that matters to you (it should).</p>
+</section>
+
+<footer>
+  Summon · open source · <a href="https://github.com/codyvolckmar/summon">github.com/codyvolckmar/summon</a><br>
+  Models belong to their creators and carry their own licences: Nanbeige (Apache-2.0), Ornith (MIT), Ollama models as listed.
+</footer>
+</div>
+<script>
+  document.querySelectorAll('button[data-copy]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var t = document.getElementById(b.dataset.copy).textContent;
+      navigator.clipboard.writeText(t).then(function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1400); });
+    });
+  });
+</script>
+</body>
+</html>
