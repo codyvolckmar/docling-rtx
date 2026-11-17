@@ -83,7 +83,7 @@
     <div class="card"><h3>Reads your GPU</h3><p>Free VRAM decides everything: which models fit, how much context, which weights. Nothing is guessed.</p></div>
     <div class="card"><h3>Picks for you</h3><p>The best model that reaches 128K context on your card is pre-selected. Context first, then the most precise weights that still fit.</p></div>
     <div class="card"><h3>Verifies</h3><p>Resumable downloads, exact byte counts, GGUF header checks, sha256 on request. Every layer stays on the GPU or it fails loudly.</p></div>
-    <div class="card"><h3>Stays private</h3><p>On your own PC it only listens on <code>127.0.0.1</code>. On a rented pod it's firewalled to the IP you SSH in from. No VPN needed.</p></div>
+    <div class="card"><h3>Stays private</h3><p>On your own PC it only listens on <code>0.0.0.0</code>. On a rented pod it's firewalled to the IP you SSH in from. No VPN needed.</p></div>
     <div class="card"><h3>Tuned per model</h3><p>The model's own chat template, native tool calls, a host-RAM prompt cache, lossless n-gram speculative decoding.</p></div>
     <div class="card"><h3>Proves it works</h3><p>Before handing you the URL, it makes a real tool call and checks it comes back in OpenAI format.</p></div>
   </div>
