@@ -162,6 +162,11 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
 # The hf.co entries are faster-thinking Qwen3.8-27B derivatives (ThinkingCap: -37% thinking tokens, -0.86pp;
 # Swift 1.5: -58.5% median thinking, +0.35%). Both carry an MTP head and restrictive licences (PolyForm Small
 # Business; Swift Open License, free <= US$1M revenue). HF refs start OFF.
+# robit/qwen3.8-27b-e03-pi-adapted (2026-11-19): Qwen3.8-27B Obliterated E03 with harness-hub's pi LoRA merged into
+# the BF16 text weights, then Q8_0 (the only build: latest/27b/q8_0 are one file, 27.3 GB + 0.9 GB vision projector).
+# GGUF: qwen35, 64 layers, full attention every 4th, 4 KV heads x (256 K + 256 V) -> 64 KB/token at f16. Ollama
+# ships the qwen3.8 renderer + qwen3.5 parser (tools, thinking, vision); its thinking default is "medium", but the
+# adapter was trained with thinking off, so clients should send think:false. Too big for 24 GB cards.
 # "rank|Q8 ref|Q4 ref|KV KB/token|fixed MB|caps|name|good at"   (rank "-" = community / HF model, opt-in)
 OL_MODELS=(
   "1|qwen3.8:27b-q8_0|qwen3.8:27b-q4_K_M|64|0|TVR|Qwen3.8 27B|LCR.82 II20 hall 29% (lowest). Best all-rounder: coding, research, agentic, vision"
@@ -171,6 +176,7 @@ OL_MODELS=(
   "5|ifm/k2-horizon:36b-q8_0|ifm/k2-horizon:36b-q4_K_M|192|0|T-R|K2 Horizon MoVA 36B-A4B|LCR.72. 512K native context, fast MoE (4B active), text only"
   "6|ifm/k2-horizon:7b-q8_0|ifm/k2-horizon:7b-q4_K_M|144|0|T-R|K2 Horizon 7B|LCR.70 at 7B. Budget pick for cheap GPUs, text only"
   "-|robit/qwen3.8-27b-obliterated-e03:27b||64|0|TVR|Qwen3.8 27B obliterated (Q4)|Uncensored Qwen3.8. Abliteration costs some coherence"
+  "-|robit/qwen3.8-27b-e03-pi-adapted:q8_0||64|0|TVR|Qwen3.8 27B E03 pi (Q8)|pi-tuned E03 merge: run with think:false"
   "-|hf.co/bottlecapai/ThinkingCap-Qwen3.8-27B-GGUF:Q8_0|hf.co/bottlecapai/ThinkingCap-Qwen3.8-27B-GGUF:Q4_K_M|64|0|TVR|ThinkingCap Qwen3.8 27B|37% less thinking, -0.86pp; MTP head, PolyForm Small Business licence"
   "-|hf.co/ukisai/Swift-1.5-Qwen3.8-27B-GGUF:Q8_0|hf.co/ukisai/Swift-1.5-Qwen3.8-27B-GGUF:Q4_K_M|64|0|TVR|Swift 1.5 Qwen3.8 27B|25-54% less thinking, +0.35% score; Swift Open Licence (<= US\$1M revenue)"
 )
@@ -954,7 +960,10 @@ install_ollama() {
     echo "  2. Start Ollama on $BIND:$PORT ($KV_TYPE KV cache, 128K default context, models stay loaded)"
     echo "  3. Access: $(access_text)"
     echo "  4. Pull:"
-    for i in "${SEL[@]}"; do echo "       ${REF[i]}  ->  $((MCTX[i] ? MCTX[i]/1024 : 64))K context, ~${GB[i]} GB VRAM"; done
+    for i in "${SEL[@]}"; do
+      if (( MCTX[i] )); then echo "       ${REF[i]}  ->  $((MCTX[i]/1024))K context, ~${GB[i]} GB VRAM"
+      else echo "       ${REF[i]}  ->  TOO BIG for this card (~${GB[i]} GB at 64K): would spill to the CPU (slow)"; fi
+    done
     (( ${#SEL[@]} )) || echo "       (nothing selected)"
     echo
     echo "Endpoint: http://$HOST_HINT:$PORT/v1"

@@ -13,7 +13,7 @@ RB = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 PANELS = [
     ('01-model-menu-a6000.png', (70, 222, 1205, 412), 'llama.cpp', ['Nanbeige 4.3 33B', 'Qwen3.8 27B pi', 'Ornith 1.5 35B / 9B'],
      'Pre-selected for your card:\n128K context, Q6_K weights'),
-    ('09-ollama-menu.png', (40, 198, 1240, 530), 'Ollama', ['Qwen3.8 27B', 'Qwen3.6, Gemma 4', '+ more'],
+    ('09-ollama-menu.png', (40, 180, 1240, 522), 'Ollama', ['Qwen3.8 27B', 'Qwen3.6, Gemma 4', '+ more'],
      'Ranked with independent\nbenchmarks, sized to your VRAM'),
 ]
 
