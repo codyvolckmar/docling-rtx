@@ -4,13 +4,14 @@
 # verifies the download, keeps the port private and tests tool calling before handing you the URL.
 #   llama.cpp (llama-server in Docker), tuned per model:
 #     Nanbeige 4.3 33B  - the agentic-coding daily driver (48 GB cards: 128-256K)
+#     Qwen3.8 27B pi    - Qwen3.8 27B + a LoRA RL-tuned to drive the pi coding agent (thinking off); vendor-tested
 #     Ornith 1.5 35B    - fast MoE (3B active), 256K with 8-bit weights on 48 GB; vendor benchmarks only
 #     Ornith 1.5 9B     - fast and light: 256K with 8-bit weights on a 24 GB card (RTX 3090/4090)
 #   Ollama: a ranked menu of other open models (Qwen3.8 27B, Qwen3.6 35B-A3B, Gemma 4 ...), swapped on demand.
 # One engine runs at a time: starting one stops the other (they would fight over VRAM and the port).
 #
 #   ./summon.sh [PORT]                       menu: model, then its context / weights (or Ollama's model list)
-#   ./summon.sh nanbeige|ornith35b|ornith9b|ollama [PORT]   skip the first menu (same as ENGINE=...)
+#   ./summon.sh nanbeige|qwen38pi|ornith35b|ornith9b|ollama [PORT]   skip the first menu (same as ENGINE=...)
 #   ./summon.sh --dry-run [PORT]             the whole wizard, then print the plan: installs and downloads nothing
 #                                            SUMMON_GPU="RTX 3090:24576" previews another card (dry runs only)
 #   ./summon.sh --lock [PORT]                re-lock the port to your current IP (new home IP / after a reboot)
@@ -19,7 +20,7 @@
 # Access: over SSH (rented pods) the port is locked to the IP you SSH in from. On your own PC (no SSH session)
 # the server only listens on 127.0.0.1. ALLOW_IP=1.2.3.4,5.6.7.0/24 shares it with those, ALLOW_IP=any opens it.
 #
-# llama.cpp options (Nanbeige, Ornith):
+# llama.cpp options (Nanbeige, Qwen3.8 pi, Ornith):
 #   CTX=131072 QUANT=Q6_K          skip the context / weights menus (either one skips its step)
 #   VERIFY_SHA256=1 or --verify    also hash the whole model file (slow; off by default)
 #   THINK_BUDGET=4096 TEMPERATURE=0.6 TOP_P=0.95 TOP_K=20   cap thinking / server sampling defaults
@@ -43,9 +44,10 @@ LC_OVERHEAD_MB=3584                             # CUDA context + compute buffers
 # Sysbox runtime can't bind into nested containers, so the first folder that mounts wins. (Named after the first
 # model for compatibility: earlier downloads are found again.)
 LC_DIRS=(/root/.nanbeige /var/lib/nanbeige /var/lib/docker/nanbeige-data)
-LC_MODEL_IDS=(nanbeige ornith35b ornith9b)
+LC_MODEL_IDS=(nanbeige qwen38pi ornith35b ornith9b)
 
 lc_model() {   # $1 = model id: sets the LC_* settings of that model
+  LC_LORA="" LC_EXTRA_BYTES=0   # optional LoRA adapter: "file|bytes|sha256|repo URL" (loaded with --lora)
   case "$1" in
     nanbeige)
       # Verified against the model card and the GGUF's own Jinja template (2026-11-17): thinking on by default,
@@ -96,6 +98,29 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
       LC_TEMP=0.6 LC_TOP_P=0.95 LC_TOP_K=20 LC_KWARGS=""
       LC_REF_Q=Q4_K_M
       LC_SPEED_NOTE="Not measured yet on Summon; a 9B model runs several times faster than Nanbeige 33B."
+      ;;
+    qwen38pi)
+      # Qwen3.8 27B + harness-hub/Qwen3.8-27B-pi-adapted (LoRA, Apache-2.0): RL-tuned (AsyncGRPO, LoRA r=32) to be
+      # the model behind the pi coding agent on software-engineering and terminal tasks, with thinking OFF. Vendor
+      # numbers (pi harness, thinking off): SWE-bench Pro hard-51 39.2% -> 64.7%, Terminal-Bench 2.1 41.0% -> 56.6%,
+      # ~4.5x fewer generated tokens than the base with thinking. Not independently tested, and its authors haven't
+      # re-evaluated the GGUF adapter. Base GGUF from ggml-org (text only: the vision projector isn't loaded).
+      # Qwen3.8 hybrid layout: 16 of 64 layers keep a cache, 4 KV heads x (256 K + 256 V) -> 64 KB/token at f16.
+      # Card settings: thinking off, temp 0.8, top_p 1.0. In pi use "api": "openai-completions" (the adapter wasn't
+      # trained with the Responses API).
+      LC_TITLE="Qwen3.8 27B pi" LC_ALIAS=qwen3.8-pi
+      LC_REPO=https://huggingface.co/ggml-org/Qwen3.8-27B-GGUF/resolve/main
+      LC_FILE_PREFIX=Qwen3.8-27B
+      LC_QUANTS=(   # ggml-org's GGUFs, best first: "quant|bytes|sha256"
+        "Q8_0|28595763840|6bc9e7220d8400574fd62df25f04a961cb5cbb0d766cf0118c21c36c0059c35a"
+        "Q4_K_M|19403684480|d15d4b6de55f662ac40e867702d31afe738d032fa06b829b2b1a21a49d4a48ee"
+      )
+      LC_LORA="Qwen3.8-27B-pi-lora-F16.gguf|318802304|a64f91844f19e67da500d8628bdf9383aa334e61b7ab687805802e7d272d7b67|https://huggingface.co/harness-hub/Qwen3.8-27B-pi-adapted-GGUF/resolve/main"
+      LC_EXTRA_BYTES=318802304                      # the adapter sits in VRAM next to the weights
+      LC_KV_F16=$(( 16 * 4 * 512 * 2 ))             # 65536 bytes/token
+      LC_TEMP=0.8 LC_TOP_P=1.0 LC_TOP_K="" LC_KWARGS='{"enable_thinking": false}'
+      LC_REF_Q=Q4_K_M
+      LC_SPEED_NOTE="Thinking is off (as trained): ~4.5x fewer tokens per task than Qwen3.8 with thinking (vendor figure)."
       ;;
     ornith35b)
       # Ornith 1.5 35B-A3B (ornith-ai, MIT): MoE, 256 experts / 8 active (~3B active), Qwen3.5 hybrid layout (GGUF
@@ -327,7 +352,7 @@ while (( $# )); do
     --dry-run) DRY_RUN=1 ;;
     -h|--help) sed -n '2,/^set -e/p' "$0" | sed -e '/^set -e/d' -e 's/^# \{0,1\}//'; exit 0 ;;
     -y) YES=1 ;;
-    nanbeige|ornith35b|ornith9b|ollama|llamacpp|llama.cpp) TARGET=$1 ;;
+    nanbeige|qwen38pi|ornith35b|ornith9b|ollama|llamacpp|llama.cpp) TARGET=$1 ;;
     -*) echo "Unknown option: $1"; exit 1 ;;
     *) [ -z "$PORT" ] || { echo "Only one port argument is accepted: '$1'"; exit 1; }; PORT=$1 ;;
   esac
@@ -349,7 +374,7 @@ fi
 
 # --- Uninstall: one engine by name, or both (a llama.cpp model name means the whole llama.cpp engine) ---
 if [ "$ACTION" = uninstall ]; then
-  case "$TARGET" in nanbeige|ornith35b|ornith9b|llama.cpp) TARGET=llamacpp ;; esac
+  case "$TARGET" in nanbeige|qwen38pi|ornith35b|ornith9b|llama.cpp) TARGET=llamacpp ;; esac
   DIRS=()
   if [ "$TARGET" != ollama ]; then for d in "${LC_DIRS[@]}"; do [ -d "$d" ] && DIRS+=("$d"); done; fi
   if [ "$TARGET" != llamacpp ]; then
@@ -389,7 +414,7 @@ fi
 # ======================================================================================================
 # llama.cpp sizing helpers (used by the first menu and the llama.cpp engine)
 # ======================================================================================================
-nb_need_mb() { echo $(( $1 / 1048576 + $2 * $3 / 1048576 )); }   # bytes, ctx, kv bytes/token -> MB
+nb_need_mb() { echo $(( ($1 + LC_EXTRA_BYTES) / 1048576 + $2 * $3 / 1048576 )); }   # weight bytes, ctx, kv bytes/token -> MB (+ LoRA)
 kv_bytes() { if [ "$1" = f16 ]; then echo "$LC_KV_F16"; else echo "$LC_KV_Q8"; fi; }
 lc_budget() { LC_BUDGET_MB=$(( FREE_MB - LC_OVERHEAD_MB - (GPU_COUNT - 1) * 1024 )); }   # llama.cpp splits layers over all cards
 fit_kv() {   # $1 = weight bytes, $2 = ctx -> most precise cache that fits (f16, then q8_0), or nothing
@@ -452,7 +477,7 @@ HAS_WHIPTAIL=0; command -v whiptail >/dev/null && HAS_WHIPTAIL=1
 [ -n "$TARGET" ] && [ -z "${ENGINE:-}" ] && ENGINE=$TARGET
 case "${ENGINE:-}" in llamacpp|llama.cpp) ENGINE=nanbeige ;; esac
 case "${ENGINE:-}" in
-  nanbeige|ornith35b|ornith9b|ollama) ;;
+  nanbeige|qwen38pi|ornith35b|ornith9b|ollama) ;;
   "")
     if [ -n "${ONLY:-}" ] || [ -n "${FAST:-}" ]; then ENGINE=ollama
     else
@@ -469,6 +494,7 @@ case "${ENGINE:-}" in
         else fit="does NOT fit this card"; fi
         case "$id" in
           nanbeige) blurb="best agentic coding (AA index 20)" ;;
+          qwen38pi) blurb="tuned for pi, no thinking (vendor-tested)" ;;
           ornith35b) blurb="fast MoE, 3B active (vendor-tested)" ;;
           ornith9b) blurb="fast 9B for 24 GB cards (vendor-tested)" ;;
         esac
@@ -489,6 +515,68 @@ esac
 # ======================================================================================================
 # Engine: llama.cpp (the model chosen above)
 # ======================================================================================================
+fetch_gguf() {   # $1 = repo URL, $2 = file, $3 = bytes, $4 = sha256 -> $DDIR/models/$2 (resumable, verified)
+  # O(1) checks catch the realistic failures (truncated download: exact byte count; an HTML error page: GGUF magic).
+  # VERIFY_SHA256=1 / --verify adds a full-file hash, which re-reads the whole file.
+  local URL=$1 FILE=$2 BYTES=$3 SHA=$4
+  local PART="$DDIR/models/$FILE.part" MODEL="$DDIR/models/$FILE"
+  part_size() { stat -c %s "$PART" 2>/dev/null || echo 0; }
+  if [ -f "$MODEL" ]; then
+    echo "Already present: $MODEL (no download, no hash)"
+  else
+    # One HEAD request: HF publishes the blob's exact size and sha256 (x-linked-size / x-linked-etag).
+    local EXPECT_SHA=$SHA META REMOTE_SIZE REMOTE_SHA SIZE
+    META=$(curl -fsSIL --connect-timeout 10 --max-time 30 "$URL/$FILE" 2>/dev/null | tr -d '\r' || true)
+    if [ -n "$META" ]; then
+      REMOTE_SIZE=$(echo "$META" | awk -F': ' 'tolower($1)=="x-linked-size" {print $2; exit}')
+      REMOTE_SHA=$(echo "$META" | awk -F': ' 'tolower($1)=="x-linked-etag" {gsub(/"/,"",$2); print $2; exit}')
+      if [ -n "$REMOTE_SIZE" ] && [ "$REMOTE_SIZE" != "$BYTES" ]; then
+        echo "HF reports $REMOTE_SIZE bytes for $FILE but this script expects $BYTES (repacked file?)."
+        echo "Update the file table for $LC_ID in $0 before retrying."; exit 1
+      fi
+      if [ -n "$REMOTE_SHA" ] && [ "$REMOTE_SHA" != "$SHA" ]; then
+        echo "Note: HF's sha256 for $FILE differs from the script's table; using HF's value."
+        EXPECT_SHA=$REMOTE_SHA
+      fi
+    fi
+    # -C - resumes a partial file, but curl errors (33/416) if the .part is already complete: reuse it instead.
+    if [ -f "$PART" ] && (( $(part_size) > BYTES )); then
+      echo "Removing an oversized partial download ($(part_size) bytes > $BYTES)."; rm -f "$PART"
+    fi
+    if [ -f "$PART" ] && (( $(part_size) == BYTES )); then
+      echo "Reusing the completed download $PART"
+    else
+      local NEED_MB FREE_DISK_MB RETRY
+      NEED_MB=$(( (BYTES - $(part_size)) / 1048576 + 1024 ))
+      FREE_DISK_MB=$(df -Pm "$DDIR/models" | awk 'NR==2 {print $4}')
+      if [ -n "$FREE_DISK_MB" ] && (( FREE_DISK_MB < NEED_MB )); then
+        echo "Not enough disk: $FREE_DISK_MB MB free in $DDIR/models, the download needs ~$NEED_MB MB."
+        echo "Delete other quants there (ls $DDIR/models) or rent a box with more disk."; exit 1
+      fi
+      [ -f "$PART" ] && echo "Resuming $PART from $(part_size) bytes..."
+      if (( BYTES >= 1073741824 )); then echo "Downloading $FILE ($((BYTES/1073741824)) GB)..."
+      else echo "Downloading $FILE ($((BYTES/1048576)) MB)..."; fi
+      RETRY=(--retry 5 --retry-delay 5)   # --retry-all-errors (curl >= 7.71) also retries mid-transfer drops
+      if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then RETRY+=(--retry-all-errors); fi
+      curl -fL "${RETRY[@]}" --connect-timeout 20 -C - --progress-bar -o "$PART" "$URL/$FILE"
+    fi
+    SIZE=$(part_size)
+    if (( SIZE != BYTES )); then
+      echo "Incomplete download: $SIZE of $BYTES bytes in $PART. Rerun to resume."
+      echo "If it never grows, the size in the script is stale (check the Hugging Face file list)."; exit 1
+    fi
+    [ "$(head -c 4 "$PART")" = GGUF ] || { echo "$PART doesn't start with the GGUF magic (bad download?); delete it and retry."; exit 1; }
+    if [ "$VERIFY_SHA256" = 1 ]; then
+      echo "Checking sha256 (this reads the whole file)..."
+      echo "$EXPECT_SHA  $PART" | sha256sum -c --status || { echo "sha256 mismatch: delete $PART and retry"; exit 1; }
+    else
+      echo "Verified $SIZE bytes + GGUF header; sha256 skipped (VERIFY_SHA256=1 / --verify to check)."
+    fi
+    mv "$PART" "$MODEL"
+  fi
+  return 0
+}
+
 install_llamacpp() {
   lc_model "$1"; lc_budget
   if [ -n "${CTX:-}" ]; then
@@ -572,9 +660,13 @@ install_llamacpp() {
     echo "  1. Install what's missing: curl, Docker, NVIDIA container toolkit"
     echo "  2. Download $LC_FILE_PREFIX-$QUANT_SEL.gguf ($((BYTES/1073741824)) GB), check size + GGUF header (sha256 with --verify)"
     echo "     from ${LC_REPO%/resolve/main}"
+    if [ -n "$LC_LORA" ]; then
+      echo "     + LoRA adapter ${LC_LORA%%|*} ($(( $(echo "$LC_LORA" | cut -d'|' -f2) / 1048576 )) MB) from $(echo "$LC_LORA" | cut -d'|' -f4 | sed 's#/resolve/main##')"
+    fi
     echo "  3. Pull $LC_IMAGE"
     echo "  4. Start llama-server: $LC_TITLE $QUANT_SEL, -c $CTX_SEL, $KV_SEL cache, all layers on the GPU,"
     echo "     temp ${TEMPERATURE} / top_p ${TOP_P}${TOP_K:+ / top_k $TOP_K}, n-gram speculation ${SPEC:-on}, host-RAM prompt cache"
+    [ -n "$LC_KWARGS" ] && echo "     chat template: $LC_KWARGS"
     echo "  5. Access: $(access_text)"
     echo "  6. Wait for /health, then test a tool call"
     echo
@@ -620,68 +712,17 @@ install_llamacpp() {
   [ -n "$DDIR" ] || { echo "Docker can't mount any folder into containers here. Use a VM or a privileged pod, or ENGINE=ollama."; exit 1; }
   echo "Docker OK: $(docker --version). Data folder: $DDIR"
 
-  # --- Model download (resumable) ---
-  # O(1) checks catch the realistic failures (truncated download: exact byte count; an HTML error page: GGUF magic).
-  # VERIFY_SHA256=1 / --verify adds a full-file hash, which re-reads 14-35 GB.
-  local FILE="$LC_FILE_PREFIX-$QUANT_SEL.gguf"
-  local PART="$DDIR/models/$FILE.part" MODEL="$DDIR/models/$FILE"
-  part_size() { stat -c %s "$PART" 2>/dev/null || echo 0; }
+  # --- Model download(s): the weights, plus the LoRA adapter if the model has one ---
+  local FILE="$LC_FILE_PREFIX-$QUANT_SEL.gguf" LORA_FILE="" LORA_BYTES LORA_SHA LORA_REPO
   mkdir -p "$DDIR/models"
   docker pull -q "$LC_IMAGE" >/dev/null 2>&1 & local PULL_PID=$!   # pull the ~3 GB image during the download
-  if [ -f "$MODEL" ]; then
-    echo "Model already present: $MODEL (no download, no hash)"
-  else
-    # One HEAD request: HF publishes the blob's exact size and sha256 (x-linked-size / x-linked-etag).
-    local EXPECT_SHA=$SHA META REMOTE_SIZE REMOTE_SHA SIZE
-    META=$(curl -fsSIL --connect-timeout 10 --max-time 30 "$LC_REPO/$FILE" 2>/dev/null | tr -d '\r' || true)
-    if [ -n "$META" ]; then
-      REMOTE_SIZE=$(echo "$META" | awk -F': ' 'tolower($1)=="x-linked-size" {print $2; exit}')
-      REMOTE_SHA=$(echo "$META" | awk -F': ' 'tolower($1)=="x-linked-etag" {gsub(/"/,"",$2); print $2; exit}')
-      if [ -n "$REMOTE_SIZE" ] && [ "$REMOTE_SIZE" != "$BYTES" ]; then
-        echo "HF reports $REMOTE_SIZE bytes for $FILE but this script expects $BYTES (repacked file?)."
-        echo "Update LC_QUANTS for $LC_ID in $0 before retrying."; exit 1
-      fi
-      if [ -n "$REMOTE_SHA" ] && [ "$REMOTE_SHA" != "$SHA" ]; then
-        echo "Note: HF's sha256 for $FILE differs from LC_QUANTS; using HF's value."
-        EXPECT_SHA=$REMOTE_SHA
-      fi
-    fi
-    # -C - resumes a partial file, but curl errors (33/416) if the .part is already complete: reuse it instead.
-    if [ -f "$PART" ] && (( $(part_size) > BYTES )); then
-      echo "Removing an oversized partial download ($(part_size) bytes > $BYTES)."; rm -f "$PART"
-    fi
-    if [ -f "$PART" ] && (( $(part_size) == BYTES )); then
-      echo "Reusing the completed download $PART"
-    else
-      local NEED_MB FREE_DISK_MB RETRY
-      NEED_MB=$(( (BYTES - $(part_size)) / 1048576 + 1024 ))
-      FREE_DISK_MB=$(df -Pm "$DDIR/models" | awk 'NR==2 {print $4}')
-      if [ -n "$FREE_DISK_MB" ] && (( FREE_DISK_MB < NEED_MB )); then
-        echo "Not enough disk: $FREE_DISK_MB MB free in $DDIR/models, the download needs ~$NEED_MB MB."
-        echo "Delete other quants there (ls $DDIR/models) or rent a box with more disk."; exit 1
-      fi
-      [ -f "$PART" ] && echo "Resuming $PART from $(part_size) bytes..."
-      echo "Downloading $FILE ($((BYTES/1073741824)) GB)..."
-      RETRY=(--retry 5 --retry-delay 5)   # --retry-all-errors (curl >= 7.71) also retries mid-transfer drops
-      if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then RETRY+=(--retry-all-errors); fi
-      curl -fL "${RETRY[@]}" --connect-timeout 20 -C - --progress-bar -o "$PART" "$LC_REPO/$FILE"
-    fi
-    SIZE=$(part_size)
-    if (( SIZE != BYTES )); then
-      echo "Incomplete download: $SIZE of $BYTES bytes in $PART. Rerun to resume."
-      echo "If it never grows, the LC_QUANTS size is stale (check the Hugging Face file list)."; exit 1
-    fi
-    [ "$(head -c 4 "$PART")" = GGUF ] || { echo "$PART doesn't start with the GGUF magic (bad download?); delete it and retry."; exit 1; }
-    if [ "$VERIFY_SHA256" = 1 ]; then
-      echo "Checking sha256 (this reads the whole file)..."
-      echo "$EXPECT_SHA  $PART" | sha256sum -c --status || { echo "sha256 mismatch: delete $PART and retry"; exit 1; }
-    else
-      echo "Verified $SIZE bytes + GGUF header; sha256 skipped (VERIFY_SHA256=1 / --verify to check)."
-    fi
-    mv "$PART" "$MODEL"
+  fetch_gguf "$LC_REPO" "$FILE" "$BYTES" "$SHA"
+  if [ -n "$LC_LORA" ]; then
+    IFS='|' read -r LORA_FILE LORA_BYTES LORA_SHA LORA_REPO <<< "$LC_LORA"
+    fetch_gguf "$LORA_REPO" "$LORA_FILE" "$LORA_BYTES" "$LORA_SHA"
   fi
   local OTHERS
-  OTHERS=$(ls "$DDIR/models" | grep -vxF "$FILE" || true)
+  OTHERS=$(ls "$DDIR/models" | grep -vxF -e "$FILE" -e "${LORA_FILE:-//}" || true)
   [ -n "$OTHERS" ] && echo "Other model files in $DDIR/models (kept, switching back is instant): $OTHERS"
 
   # --- Start (or replace) the server ---
@@ -698,6 +739,7 @@ install_llamacpp() {
   if [ -n "${THINK_BUDGET:-}" ]; then SERVER_ARGS+=(--reasoning-budget "$THINK_BUDGET"); fi
   if [ -n "$TOP_K" ]; then SERVER_ARGS+=(--top-k "$TOP_K"); fi
   if [ -n "$LC_KWARGS" ]; then SERVER_ARGS+=(--chat-template-kwargs "$LC_KWARGS"); fi
+  if [ -n "$LORA_FILE" ]; then SERVER_ARGS+=(--lora "/models/$LORA_FILE"); fi
   # n-gram self-speculative decoding: drafts from text already in the context, verified by the model, so the
   # output is identical. Pays off when the agent re-types code it has seen. No draft model, no extra VRAM.
   if [ "${SPEC:-ngram-mod}" != off ]; then

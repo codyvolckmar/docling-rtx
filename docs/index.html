@@ -94,6 +94,7 @@
   <table>
     <tr><th>Model</th><th>Engine</th><th>Good at</th><th>24 GB (RTX 3090 / 4090)</th><th>48 GB (RTX A6000)</th></tr>
     <tr><td><b>Nanbeige 4.3 33B</b></td><td>llama.cpp</td><td>Agentic coding. Top of the ≤40B class on Artificial Analysis (index 20).</td><td>up to 48K</td><td>128K (Q6_K) · 256K (Q3_K_M)</td></tr>
+    <tr><td><b>Qwen3.8 27B pi</b></td><td>llama.cpp</td><td>Qwen3.8 27B plus a LoRA trained with RL to drive the pi coding agent. Thinking off, far fewer tokens. Vendor benchmarks only.</td><td>~48K (Q4_K_M)</td><td>256K with 8-bit weights</td></tr>
     <tr><td><b>Ornith 1.5 35B</b></td><td>llama.cpp</td><td>Fast MoE, ~3B active per token. Vendor benchmarks only.</td><td>doesn't fit</td><td>256K with 8-bit weights</td></tr>
     <tr><td><b>Ornith 1.5 9B</b></td><td>llama.cpp</td><td>Fast and light. Vendor benchmarks only.</td><td>256K with 8-bit weights</td><td>256K with 8-bit weights</td></tr>
     <tr><td><b>Ollama models</b></td><td>Ollama</td><td>Qwen3.8 27B, Qwen3.6 35B-A3B, Gemma 4 31B, K2 Horizon, Muse Glimmer…</td><td>Qwen3.8 27B at 64K</td><td>most at 128K, 8-bit</td></tr>

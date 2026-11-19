@@ -34,6 +34,7 @@ Piping a script into a shell gives it root. Read [summon.sh](summon.sh) first; i
 | Model | Engine | 24 GB (RTX 3090/4090) | 48 GB (RTX A6000) |
 |---|---|---|---|
 | **Nanbeige 4.3 33B**: agentic coding, Artificial Analysis index 20 (top of the ≤40B class) | llama.cpp | up to 48K | 128K (Q6_K) · 256K (Q3_K_M) |
+| **Qwen3.8 27B pi**: Qwen3.8 27B + a LoRA RL-tuned to drive the [pi](https://github.com/earendil-works/pi) coding agent, thinking off (vendor benchmarks) | llama.cpp | ~48K (Q4_K_M) | 256K, 8-bit weights |
 | **Ornith 1.5 35B**: fast MoE, ~3B active (vendor benchmarks) | llama.cpp | doesn't fit | 256K, 8-bit weights |
 | **Ornith 1.5 9B**: fast and light (vendor benchmarks) | llama.cpp | 256K, 8-bit weights | 256K, 8-bit weights |
 | **Ollama models**: Qwen3.8 27B, Qwen3.6 35B-A3B, Gemma 4 31B, K2 Horizon, Muse Glimmer… | Ollama | Qwen3.8 27B at 64K | most at 128K, 8-bit |
@@ -42,7 +43,7 @@ Piping a script into a shell gives it root. Read [summon.sh](summon.sh) first; i
 
 ```bash
 ./summon.sh [PORT]                          # the wizard
-./summon.sh nanbeige|ornith35b|ornith9b|ollama [PORT]   # skip the first menu
+./summon.sh nanbeige|qwen38pi|ornith35b|ornith9b|ollama [PORT]   # skip the first menu
 ./summon.sh --dry-run [PORT]                # plan only, installs nothing
 ./summon.sh --lock [PORT]                   # re-lock a rented pod's port to your current IP
 ./summon.sh --uninstall [llamacpp|ollama]   # remove an engine and its model files
