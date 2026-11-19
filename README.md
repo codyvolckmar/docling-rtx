@@ -37,13 +37,14 @@ Piping a script into a shell gives it root. Read [summon.sh](summon.sh) first; i
 | **Qwen3.8 27B pi**: Qwen3.8 27B + a LoRA RL-tuned to drive the [pi](https://github.com/earendil-works/pi) coding agent, thinking off (vendor benchmarks) | llama.cpp | ~48K (Q4_K_M) | 256K, 8-bit weights |
 | **Ornith 1.5 35B**: fast MoE, ~3B active (vendor benchmarks) | llama.cpp | 128K with experts in RAM (needs ~30 GB free RAM) | 256K, 8-bit weights |
 | **Ornith 1.5 9B**: fast and light (vendor benchmarks) | llama.cpp | 256K, 8-bit weights | 256K, 8-bit weights |
+| **ThinkingCap Qwen3.8 27B**: Qwen3.8 27B that thinks ~37% less (vendor: -0.86 pts), built-in MTP head. PolyForm Small Business licence | llama.cpp | 128K, IQ4_XS | 128K, 8-bit weights |
 | **Ollama models**: Qwen3.8 27B, Qwen3.6 35B-A3B, Gemma 4 31B, K2 Horizon, Muse Glimmer… | Ollama | Qwen3.8 27B at 64K | most at 128K, 8-bit |
 
 ## Usage
 
 ```bash
 ./summon.sh [PORT]                          # the wizard: one menu with every model, sized to your card
-./summon.sh nanbeige|qwen38pi|ornith35b|ornith9b [PORT]   # skip the menu
+./summon.sh nanbeige|qwen38pi|ornith35b|ornith9b|thinkingcap [PORT]   # skip the menu
 ONLY=1,3 ./summon.sh [PORT]                 # pull several Ollama models at once (rows in list order)
 ./summon.sh --dry-run [PORT]                # plan only, installs nothing
 ./summon.sh --lock [PORT]                   # re-lock a rented pod's port to your current IP
@@ -61,7 +62,7 @@ Then point any OpenAI-compatible client at `http://localhost:PORT/v1` (rented po
 - **Each model's own chat template** (llama.cpp `--jinja`), so native tool calls and thinking blocks work. That's why Nanbeige and Ornith run on llama.cpp: Ollama's builds of them ship without tool support.
 - **Every layer on the GPU** (`--fit off`): if it doesn't fit, it fails loudly instead of silently crawling on the CPU.
 - **Host-RAM prompt cache** so side requests (chat titles, subagents) don't evict a 200K-token conversation.
-- **Speculative decoding** (v1.1.0): each model's draft plus n-gram drafts. Qwen3.8 uses its MTP head (+60-90% measured on base Qwen3.8), Ornith its built-in MTP layer, Nanbeige the optional Nanbeige4.1-3B draft model (~70% faster decoding, ~3x faster tool calls, community-measured). A draft that would cost weight precision on your card is offered, never forced. The model checks every drafted token, so quality holds on average, but outputs aren't bit-identical to a run without it: `SPEC=off` for reproducible runs.
+- **Speculative decoding** (v1.1.0): each model's draft plus n-gram drafts. Qwen3.8 uses its MTP head (+60-90% measured on base Qwen3.8), Ornith and ThinkingCap their built-in MTP layer (ThinkingCap: ~1.3x, measured by its makers), Nanbeige the optional Nanbeige4.1-3B draft model (~70% faster decoding, ~3x faster tool calls, community-measured). A draft that would cost weight precision on your card is offered, never forced. The model checks every drafted token, so quality holds on average, but outputs aren't bit-identical to a run without it: `SPEC=off` for reproducible runs.
 - **MoE experts in system RAM** (v1.1.0): a mixture-of-experts model that doesn't fit VRAM (Ornith 35B on a 24 GB card) keeps its experts in RAM and caches the hot ones on the GPU (llama.cpp `--cpu-moe` + `--moe-cache-mib`), shown as `+RAM` in the menu. Summon only offers it when the GPU cache holds at least 60% of the experts, and never pre-selects it.
 
 ## Screenshots

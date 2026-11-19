@@ -7,11 +7,12 @@
 #     Qwen3.8 27B pi    - Qwen3.8 27B + a LoRA RL-tuned to drive the pi coding agent (thinking off); vendor-tested
 #     Ornith 1.5 35B    - fast MoE (3B active), 256K with 8-bit weights on 48 GB; vendor benchmarks only
 #     Ornith 1.5 9B     - fast and light: 256K with 8-bit weights on a 24 GB card (RTX 3090/4090)
+#     ThinkingCap 27B   - Qwen3.8 27B that thinks ~37% less, with its built-in MTP head (PolyForm Small Business)
 #   Ollama: a ranked menu of other open models (Qwen3.8 27B, Qwen3.6 35B-A3B, Gemma 4 ...), swapped on demand.
 # One engine runs at a time: starting one stops the other (they would fight over VRAM and the port).
 #
 #   ./summon.sh [PORT]                       one menu with every model (llama.cpp + Ollama), then context/weights
-#   ./summon.sh nanbeige|qwen38pi|ornith35b|ornith9b [PORT]   skip the menu (same as ENGINE=...)
+#   ./summon.sh nanbeige|qwen38pi|ornith35b|ornith9b|thinkingcap [PORT]   skip the menu (same as ENGINE=...)
 #   ./summon.sh ollama [PORT]                the menu, with the recommended Ollama model pre-selected
 #   ./summon.sh --dry-run [PORT]             the whole wizard, then print the plan: installs and downloads nothing
 #                                            SUMMON_GPU="RTX 3090:24576" previews another card (dry runs only)
@@ -50,7 +51,7 @@ LC_OVERHEAD_MB=3584                             # CUDA context + compute buffers
 # Sysbox runtime can't bind into nested containers, so the first folder that mounts wins. (Named after the first
 # model for compatibility: earlier downloads are found again.)
 LC_DIRS=(/root/.nanbeige /var/lib/nanbeige /var/lib/docker/nanbeige-data)
-LC_MODEL_IDS=(nanbeige qwen38pi ornith35b ornith9b)
+LC_MODEL_IDS=(nanbeige qwen38pi ornith35b ornith9b thinkingcap)   # order = menu order; first that reaches 128K is the default
 
 lc_model() {   # $1 = model id: sets the LC_* settings of that model
   LC_LORA="" LC_EXTRA_BYTES=0   # optional LoRA adapter: "file|bytes|sha256|repo URL" (loaded with --lora)
@@ -58,6 +59,7 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
   # inside the model file) | "" (none). LC_DRAFT = "file|bytes|sha256|repo URL"; LC_DRAFT_KV_F16 = its cache per
   # token. LC_EXPERT_PCT = share of the weights that are MoE routed experts (they can live in system RAM).
   LC_DRAFT_KIND="" LC_DRAFT="" LC_DRAFT_KV_F16=0 LC_DRAFT_PAD=0 LC_DRAFT_TITLE="" LC_DRAFT_GAIN="" LC_EXPERT_PCT=0
+  LC_DRAFT_NMAX=""   # tokens drafted per step (default: 4 for a draft model, 2 for MTP)
   case "$1" in
     nanbeige)
       # Verified against the model card and the GGUF's own Jinja template (2026-11-17): thinking on by default,
@@ -172,6 +174,31 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
       LC_DRAFT_TITLE="Ornith's built-in MTP layer" LC_DRAFT_GAIN="faster decoding, no extra download (speed-up not yet measured)"
       LC_REF_Q=Q4_K_M
       LC_SPEED_NOTE="Not measured yet on Summon; ~3B active parameters per token, so it decodes far faster than a dense 33B."
+      ;;
+    thinkingcap)
+      # ThinkingCap Qwen3.8 27B (bottlecapai): Qwen3.8 27B fine-tuned to think less: -37.2% mean thinking tokens for
+      # -0.86 pts accuracy over 12 benchmarks (vendor). Licence: PolyForm Small Business 1.0.0 + a personal-use grant
+      # (commercial use above the small-business limits needs a BottleCap licence). The GGUFs are open (not gated).
+      # Dense model: no MoE experts. Its GGUFs carry Qwen3.8's MTP layer (blk.64, read from the Q4_K_M tensor table):
+      # the makers serve it with --spec-type draft-mtp --spec-draft-n-max 3 and measured ~1.30x decode on Q4_K_M.
+      # Qwen3.8 hybrid layout: 16 of 64 layers keep a cache, 4 KV heads x 512 -> 64 KB/token + 4 KB for the MTP layer.
+      # Sampling: the base model's thinking-mode settings, as the card says (greedy decoding can loop). Vision needs
+      # the separate mmproj file, which Summon doesn't load (text only).
+      LC_TITLE="ThinkingCap Qwen3.8 27B" LC_ALIAS=thinkingcap-27b
+      LC_REPO=https://huggingface.co/bottlecapai/ThinkingCap-Qwen3.8-27B-GGUF/resolve/main
+      LC_FILE_PREFIX=ThinkingCap-Qwen3.8-27B
+      LC_QUANTS=(   # bottlecapai's GGUFs, best first: "quant|bytes|sha256"
+        "Q8_0|29047085152|41070725606f4be781db804e8458f3346c699d0dac24f2b96d2a734556c6c0f7"
+        "Q6_K|23860566112|36ab5032dc4725f8acdb237070f9e5574171e0e29cd583fcc417a6c8ef87f557"
+        "Q4_K_M|17442400352|fafa890ce2ce8531b4ade225c7dbd5f5d72a92303ca9ef72890c6cf78f19f299"
+        "IQ4_XS|15475951712|c69ef3bbd56fe528bc9683186d14047243b00f41d3707016718775841d877cb2"
+      )
+      LC_KV_F16=$(( 16 * 4 * 512 * 2 ))             # 65536 bytes/token
+      LC_TEMP=1.0 LC_TOP_P=0.95 LC_TOP_K=20 LC_KWARGS=""
+      LC_DRAFT_KIND=mtp-inline LC_DRAFT_KV_F16=$(( 4 * 512 * 2 )) LC_DRAFT_NMAX=3
+      LC_DRAFT_TITLE="ThinkingCap's built-in MTP layer" LC_DRAFT_GAIN="~1.3x faster decoding (measured by its makers on Q4_K_M)"
+      LC_REF_Q=Q4_K_M
+      LC_SPEED_NOTE="Thinks ~37% less than Qwen3.8 (vendor, -0.86 pts), so answers finish sooner at the same tok/s."
       ;;
     *) echo "Unknown llama.cpp model '$1' (use: ${LC_MODEL_IDS[*]})"; exit 1 ;;
   esac
@@ -412,7 +439,7 @@ while (( $# )); do
     --version) echo "summon $SUMMON_VERSION"; exit 0 ;;
     -h|--help) sed -n '2,/^set -e/p' "$0" | sed -e '/^set -e/d' -e 's/^# \{0,1\}//'; exit 0 ;;
     -y) YES=1 ;;
-    nanbeige|qwen38pi|ornith35b|ornith9b|ollama|llamacpp|llama.cpp) TARGET=$1 ;;
+    nanbeige|qwen38pi|ornith35b|ornith9b|thinkingcap|ollama|llamacpp|llama.cpp) TARGET=$1 ;;
     -*) echo "Unknown option: $1"; exit 1 ;;
     *) [ -z "$PORT" ] || { echo "Only one port argument is accepted: '$1'"; exit 1; }; PORT=$1 ;;
   esac
@@ -434,7 +461,7 @@ fi
 
 # --- Uninstall: one engine by name, or both (a llama.cpp model name means the whole llama.cpp engine) ---
 if [ "$ACTION" = uninstall ]; then
-  case "$TARGET" in nanbeige|qwen38pi|ornith35b|ornith9b|llama.cpp) TARGET=llamacpp ;; esac
+  case "$TARGET" in nanbeige|qwen38pi|ornith35b|ornith9b|thinkingcap|llama.cpp) TARGET=llamacpp ;; esac
   DIRS=()
   if [ "$TARGET" != ollama ]; then for d in "${LC_DIRS[@]}"; do [ -d "$d" ] && DIRS+=("$d"); done; fi
   if [ "$TARGET" != llamacpp ]; then
@@ -666,7 +693,7 @@ HAS_WHIPTAIL=0; command -v whiptail >/dev/null && HAS_WHIPTAIL=1
 case "${ENGINE:-}" in llamacpp|llama.cpp) ENGINE=nanbeige ;; esac
 if [ -z "${ENGINE:-}" ] && { [ -n "${ONLY:-}" ] || [ -n "${FAST:-}" ]; }; then ENGINE=ollama; fi
 case "${ENGINE:-}" in
-  nanbeige|qwen38pi|ornith35b|ornith9b|ollama|"") ;;
+  nanbeige|qwen38pi|ornith35b|ornith9b|thinkingcap|ollama|"") ;;
   *) echo "ENGINE must be one of: ${LC_MODEL_IDS[*]} ollama (got '$ENGINE')"; exit 1 ;;
 esac
 OL_PICK=""
@@ -707,6 +734,7 @@ if [ -z "${ENGINE:-}" ] || { [ "$ENGINE" = ollama ] && [ -z "${ONLY:-}" ]; }; th
       qwen38pi) blurb="Qwen3.8 + RL-tuned LoRA for the pi agent. No thinking" ;;
       ornith35b) blurb="Self-improving MoE for coding agents. 3B active, fast" ;;
       ornith9b) blurb="Self-improving 9B: light, fast, 256K on 24 GB cards" ;;
+      thinkingcap) blurb="Qwen3.8 that thinks 37% less, MTP on. PolyForm SB" ;;
     esac
     LC_ITEMS+=("$id" "$(row "$LC_TITLE" "$fit" "$blurb")")
   done
@@ -1093,9 +1121,9 @@ install_llamacpp() {
     if (( LC_DRAFT_ON )); then
       case "$LC_DRAFT_KIND" in
         model) SPEC_TYPES=draft-simple,ngram-mod
-               SERVER_ARGS+=(-md "/models/$DRAFT_FILE" --spec-draft-ngl all --spec-draft-n-max 4 --spec-draft-p-min 0.6) ;;
-        mtp)   SPEC_TYPES=draft-mtp,ngram-mod; SERVER_ARGS+=(-md "/models/$DRAFT_FILE" --spec-draft-n-max 2) ;;
-        mtp-inline) SPEC_TYPES=draft-mtp,ngram-mod; SERVER_ARGS+=(--spec-draft-n-max 2) ;;
+               SERVER_ARGS+=(-md "/models/$DRAFT_FILE" --spec-draft-ngl all --spec-draft-n-max "${LC_DRAFT_NMAX:-4}" --spec-draft-p-min 0.6) ;;
+        mtp)   SPEC_TYPES=draft-mtp,ngram-mod; SERVER_ARGS+=(-md "/models/$DRAFT_FILE" --spec-draft-n-max "${LC_DRAFT_NMAX:-2}") ;;
+        mtp-inline) SPEC_TYPES=draft-mtp,ngram-mod; SERVER_ARGS+=(--spec-draft-n-max "${LC_DRAFT_NMAX:-2}") ;;
       esac
       SERVER_ARGS+=(-ctkd "$KV_TYPE_SEL" -ctvd "$KV_TYPE_SEL")
     fi
