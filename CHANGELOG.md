@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.1.0 (2026-11-19)
+
+- **Draft models (speculative decoding).** Each llama.cpp model gets its draft, combined with n-gram drafts:
+  - Qwen3.8 27B pi: Qwen3.8's MTP head (ggml-org's separate file, 3 GB). Measured on base Qwen3.8 27B: +60% decode on an RTX 3090, 1.9x on code.
+  - Ornith 1.5 35B / 9B: the MTP layer built into the model file, no extra download.
+  - Nanbeige 4.3 33B: the Nanbeige4.1-3B draft model, padded once at install to the 33B's vocabulary (pad_draft.py, MIT, run in a throwaway container). Community-measured: ~70% faster decoding, ~3x faster tool calls.
+  - The VRAM fit counts every draft. A draft that costs nothing is on by default; one that would lower the weights (Nanbeige's 3B on a 48 GB card: Q4_K_M instead of Q6_K at 128K) is asked about, with "No" pre-selected. `DRAFT=on|off` decides up front, `SPEC=off` turns all speculation off.
+- **MoE experts in system RAM.** Mixture-of-experts models that don't fit VRAM run with their routed experts in RAM and the hot ones cached on the GPU (`--cpu-moe` + `--moe-cache-mib`, which llama.cpp leaves off by default). Ornith 1.5 35B now runs on a 24 GB card (Q6_K at 128K with ~30 GB free RAM). Offered only when the GPU cache holds >= 60% of the experts; shown as `+RAM`; never pre-selected.
+- **Accuracy fix:** speculative decoding was described as lossless. Quality holds on average, but outputs aren't bit-identical (batched verification changes float rounding); docs and messages now say so.
+- Dry runs can preview another machine's RAM: `SUMMON_RAM=65536`.
+
 ## v1.0.1 (2026-11-19)
 
 - **One menu for every model.** llama.cpp and Ollama models share a single list, grouped under engine headers, with a description from each model's card and what fits on your card (weights ~VRAM@context, or TOO BIG). It fits on one screen; short terminals get a compact list.

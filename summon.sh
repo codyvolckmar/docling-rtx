@@ -25,14 +25,18 @@
 #   CTX=131072 QUANT=Q6_K          skip the context / weights menus (either one skips its step)
 #   VERIFY_SHA256=1 or --verify    also hash the whole model file (slow; off by default)
 #   THINK_BUDGET=4096 TEMPERATURE=0.6 TOP_P=0.95 TOP_K=20   cap thinking / server sampling defaults
-#   SPEC=off                       disable n-gram speculative decoding (on by default)
+#   DRAFT=off                      no draft model (MTP head / Nanbeige4.1-3B); asked interactively otherwise
+#   SPEC=off                       no speculative decoding at all (draft model + n-gram), for reproducible runs
+# MoE models (Ornith 35B) that don't fit VRAM run with their experts in system RAM and the hot ones cached on
+# the GPU (--cpu-moe + --moe-cache-mib): menus mark this "+RAM". Speculation keeps quality on average but isn't
+# bit-identical: verifying a batch of drafted tokens changes float rounding, so near-tied tokens can flip.
 # Ollama options:
 #   ONLY=1,3                       skip the menu, pull these Ollama models (1 = Qwen3.8 27B ... in list order)
 #   FAST=1                         try Q4 before Q8 (~1.7x decode speed, ~11 GB less VRAM)
 #   OLLAMA_KV_CACHE_TYPE=q8_0      halve K/V memory (global: affects every model)
 set -e
 export DEBIAN_FRONTEND=noninteractive
-SUMMON_VERSION=1.0.1
+SUMMON_VERSION=1.1.0
 
 # ======================================================================================================
 # llama.cpp models (one runs at a time; all share the image, container, data folder and server tuning)
@@ -50,6 +54,10 @@ LC_MODEL_IDS=(nanbeige qwen38pi ornith35b ornith9b)
 
 lc_model() {   # $1 = model id: sets the LC_* settings of that model
   LC_LORA="" LC_EXTRA_BYTES=0   # optional LoRA adapter: "file|bytes|sha256|repo URL" (loaded with --lora)
+  # Speculative draft: LC_DRAFT_KIND = model (a small model, -md) | mtp (MTP head file, -md) | mtp-inline (MTP layer
+  # inside the model file) | "" (none). LC_DRAFT = "file|bytes|sha256|repo URL"; LC_DRAFT_KV_F16 = its cache per
+  # token. LC_EXPERT_PCT = share of the weights that are MoE routed experts (they can live in system RAM).
+  LC_DRAFT_KIND="" LC_DRAFT="" LC_DRAFT_KV_F16=0 LC_DRAFT_PAD=0 LC_DRAFT_TITLE="" LC_DRAFT_GAIN="" LC_EXPERT_PCT=0
   case "$1" in
     nanbeige)
       # Verified against the model card and the GGUF's own Jinja template (2026-11-17): thinking on by default,
@@ -75,6 +83,13 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
       )
       LC_KV_F16=$(( 52 * 8 * 256 * 2 ))            # 212992 bytes/token
       LC_TEMP=1.0 LC_TOP_P=0.95 LC_TOP_K="" LC_KWARGS='{"preserve_thinking": true}'
+      # Draft: Nanbeige4.1-3B (same tokenizer; llama arch, 32 layers x 4 KV heads x 256 -> 64 KB/token at f16).
+      # Its GGUF pads the vocabulary to 166,144 entries vs the 33B's 166,912, more than llama.cpp's 128 tolerance,
+      # so it's padded once at install (pad_draft.py, MIT, from github.com/dedene/Nanbeige4.3-33B-DGX-Spark).
+      # Measured there (DGX Spark, Q6_K, b11870): decode 7.3 -> 12.6 tok/s, tool calls 7.8 -> 24.4, prefill -15%.
+      LC_DRAFT_KIND=model LC_DRAFT_PAD=1 LC_DRAFT_KV_F16=$(( 32 * 4 * 256 * 2 ))
+      LC_DRAFT="Nanbeige4.1-3B.Q4_K_M.gguf|2443113024|0ba28f064c66071646e7959c752851abf02a096f1d37e7d0e443e3502e12ca02|https://huggingface.co/mradermacher/Nanbeige4.1-3B-GGUF/resolve/main"
+      LC_DRAFT_TITLE="Nanbeige4.1-3B draft model" LC_DRAFT_GAIN="~70% faster decoding, ~3x faster tool calls (community-measured)"
       LC_REF_Q=Q3_K_M
       LC_SPEED_NOTE="Q3_K_M measured 38.7 tok/s on an empty context, ~15 at 58K (RTX A6000)."
       ;;
@@ -98,6 +113,9 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
       )
       LC_KV_F16=$(( 8 * 4 * 512 * 2 ))             # 32768 bytes/token
       LC_TEMP=0.6 LC_TOP_P=0.95 LC_TOP_K=20 LC_KWARGS=""
+      # MTP layer inside the file (blk.32, one more full-attention layer -> 4 KB/token).
+      LC_DRAFT_KIND=mtp-inline LC_DRAFT_KV_F16=$(( 4 * 512 * 2 ))
+      LC_DRAFT_TITLE="Ornith's built-in MTP layer" LC_DRAFT_GAIN="faster decoding, no extra download (speed-up not yet measured)"
       LC_REF_Q=Q4_K_M
       LC_SPEED_NOTE="Not measured yet on Summon; a 9B model runs several times faster than Nanbeige 33B."
       ;;
@@ -121,6 +139,12 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
       LC_EXTRA_BYTES=318802304                      # the adapter sits in VRAM next to the weights
       LC_KV_F16=$(( 16 * 4 * 512 * 2 ))             # 65536 bytes/token
       LC_TEMP=0.8 LC_TOP_P=1.0 LC_TOP_K="" LC_KWARGS='{"enable_thinking": false}'
+      # Draft: Qwen3.8's own MTP head, shipped by ggml-org as a separate file (one full-attention layer -> 4 KB/token).
+      # Measured on base Qwen3.8 27B: +60% decode on an RTX 3090 (preregistered study, n-max 2), 1.9x on code. With
+      # the pi LoRA on the target, the head's acceptance rate is unmeasured.
+      LC_DRAFT_KIND=mtp LC_DRAFT_KV_F16=$(( 4 * 512 * 2 ))
+      LC_DRAFT="mtp-Qwen3.8-27B-Q8_0.gguf|3164006976|572ebcd0349321a71ccc6886c2611ff9d8c9aa160312ed4c90ae5bf9a055f4c6|https://huggingface.co/ggml-org/Qwen3.8-27B-GGUF/resolve/main"
+      LC_DRAFT_TITLE="Qwen3.8 MTP head" LC_DRAFT_GAIN="~60-90% faster decoding on base Qwen3.8 (measured)"
       LC_REF_Q=Q4_K_M
       LC_SPEED_NOTE="Thinking is off (as trained): ~4.5x fewer tokens per task than Qwen3.8 with thinking (vendor figure)."
       ;;
@@ -140,14 +164,26 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
         "Q5_K_M|25347532544|91df97de5845100e850b4b5ec5ff35695382020b880fad6f7f51787b3a953bd0"
         "Q4_K_M|21713463040|42739874cc2ccfdb8523b23fbe52e29b2a7555c8176737ca9ca0b5d59859d41f"
       )
-      LC_KV_F16=$(( 11 * 2 * 512 * 2 ))            # 22528 bytes/token
+      LC_KV_F16=$(( 11 * 2 * 512 * 2 ))            # 22528 bytes/token (includes the MTP layer)
       LC_TEMP=0.6 LC_TOP_P=0.95 LC_TOP_K=20 LC_KWARGS=""
+      # MTP layer inside the file (blk.40). Routed experts: 92% of the weights (19.1 of 20.7 GB at Q4_K_M, read
+      # from the GGUF tensor table), so on a 24 GB card they live in RAM with the hot ones cached on the GPU.
+      LC_DRAFT_KIND=mtp-inline LC_DRAFT_KV_F16=0 LC_EXPERT_PCT=92
+      LC_DRAFT_TITLE="Ornith's built-in MTP layer" LC_DRAFT_GAIN="faster decoding, no extra download (speed-up not yet measured)"
       LC_REF_Q=Q4_K_M
       LC_SPEED_NOTE="Not measured yet on Summon; ~3B active parameters per token, so it decodes far faster than a dense 33B."
       ;;
     *) echo "Unknown llama.cpp model '$1' (use: ${LC_MODEL_IDS[*]})"; exit 1 ;;
   esac
   LC_ID=$1
+  # An active draft costs VRAM: its weights (if a separate file), its own cache per token, ~0.5 GB of buffers.
+  LC_DRAFT_ON=0
+  if [ -n "$LC_DRAFT_KIND" ] && [ "${DRAFT:-on}" != off ] && [ "${SPEC:-}" != off ]; then
+    LC_DRAFT_ON=1
+    LC_KV_F16=$(( LC_KV_F16 + LC_DRAFT_KV_F16 ))
+    LC_EXTRA_BYTES=$(( LC_EXTRA_BYTES + 536870912 ))
+    [ -n "$LC_DRAFT" ] && LC_EXTRA_BYTES=$(( LC_EXTRA_BYTES + $(echo "$LC_DRAFT" | cut -d'|' -f2) ))
+  fi
   LC_KV_Q8=$(( LC_KV_F16 * 17 / 32 ))           # q8_0 = 1 byte + a 2-byte scale per 32 values (vs 2 bytes at f16)
   local e; LC_REF_BYTES=""
   for e in "${LC_QUANTS[@]}"; do [ "${e%%|*}" = "$LC_REF_Q" ] && LC_REF_BYTES=$(echo "$e" | cut -d'|' -f2); done
@@ -184,7 +220,7 @@ OL_MODELS=(
   "-|robit/qwen3.8-27b-obliterated-e03:27b||64|0|TVR|Qwen3.8 27B obliterated (Q4)|Unshackled (uncensored) Qwen3.8 27B via Obliteratus"
   "-|robit/qwen3.8-27b-e03-pi-adapted:q8_0||64|0|TVR|Qwen3.8 27B E03 pi (Q8)|Obliterated E03 + pi LoRA for the pi agent. Think off"
   "-|hf.co/bottlecapai/ThinkingCap-Qwen3.8-27B-GGUF:Q8_0|hf.co/bottlecapai/ThinkingCap-Qwen3.8-27B-GGUF:Q4_K_M|64|0|TVR|ThinkingCap Qwen3.8 27B|Qwen3.8 that thinks 37% less, -0.86 pts. PolyForm SB"
-  "-|hf.co/ukisai/Swift-1.5-Qwen3.8-27B-GGUF:Q8_0|hf.co/ukisai/Swift-1.5-Qwen3.8-27B-GGUF:Q4_K_M|64|0|TVR|Swift 1.5 Qwen3.8 27B|Qwen3.8 with 25-54% less thinking. Swift licence (<= US\$1M)"
+  "-|hf.co/ukisai/Swift-1.5-Qwen3.8-27B-GGUF:Q8_0|hf.co/ukisai/Swift-1.5-Qwen3.8-27B-GGUF:Q4_K_M|64|0|TVR|Swift 1.5 Qwen3.8 27B|Qwen3.8 with 25-54% less thinking. Swift licence <=\$1M"
 )
 # Hugging Face GGUF refs have no Ollama registry manifest: exact sizes in MiB from the HF file list (2026-11-17).
 declare -A HF_MB=(
@@ -439,13 +475,41 @@ fi
 # llama.cpp sizing helpers (used by the first menu and the llama.cpp engine)
 # ======================================================================================================
 nb_need_mb() { echo $(( ($1 + LC_EXTRA_BYTES) / 1048576 + $2 * $3 / 1048576 )); }   # weight bytes, ctx, kv bytes/token -> MB (+ LoRA)
-kv_bytes() { if [ "$1" = f16 ]; then echo "$LC_KV_F16"; else echo "$LC_KV_Q8"; fi; }
+kv_bytes() { if [ "${1%+ram}" = f16 ]; then echo "$LC_KV_F16"; else echo "$LC_KV_Q8"; fi; }   # "q8_0+ram" -> q8_0
+MOE_MIN_CACHE_PCT=60                           # the GPU expert cache must hold >= 60% of the experts (few RAM reads)
+ram_gpu_mb() {   # MoE with experts in RAM: GPU MB for the non-expert weights + extras + cache (no expert cache)
+  echo $(( $1 * (100 - LC_EXPERT_PCT) / 100 / 1048576 + LC_EXTRA_BYTES / 1048576 + $2 * $(kv_bytes "$3") / 1048576 ))
+}
+vram_text() {   # $1 weight bytes, $2 ctx, $3 cache type -> "~44G" or, experts in RAM, "~23G+18G RAM"
+  if [[ $3 == *+ram ]]; then echo "~$(( (LC_BUDGET_MB + LC_OVERHEAD_MB) / 1024 ))G VRAM + $(( $1 * LC_EXPERT_PCT / 100 / 1073741824 ))G RAM"
+  else echo "~$(( ($(nb_need_mb "$1" "$2" "$(kv_bytes "$3")") + LC_OVERHEAD_MB) / 1024 ))G"; fi
+}
+draft_auto() {   # $1 = model id -> sets DRAFT=on/off when unset: on if it doesn't lower the best weights that fit
+  [ -n "${DRAFT:-}" ] && return 0
+  local q_on q_off c=131072
+  DRAFT=off; lc_model "$1"; lc_budget; q_off=$(best_quant $c)
+  if [ -z "$q_off" ]; then for c in "${LC_CTX_TIERS[@]}"; do q_off=$(best_quant "$c"); [ -n "$q_off" ] && break; done; fi
+  DRAFT=on;  lc_model "$1"; lc_budget; q_on=$(best_quant $c)
+  if [ -n "$q_on" ] && [ "$q_on" = "$q_off" ]; then DRAFT=on; else DRAFT=off; fi
+  DRAFT_AUTO_ON=$q_on DRAFT_AUTO_OFF=$q_off DRAFT_AUTO_CTX=$c
+  return 0
+}
 lc_budget() { LC_BUDGET_MB=$(( FREE_MB - LC_OVERHEAD_MB - (GPU_COUNT - 1) * 1024 )); }   # llama.cpp splits layers over all cards
-fit_kv() {   # $1 = weight bytes, $2 = ctx -> most precise cache that fits (f16, then q8_0), or nothing
+fit_kv() {   # $1 = weight bytes, $2 = ctx -> most precise cache that fits (f16, then q8_0), or nothing.
+  # MoE models that don't fit try the experts-in-RAM tier ("f16+ram"/"q8_0+ram"): the non-expert weights, the
+  # cache and an expert cache holding >= 60% of the experts on the GPU, all routed experts in system RAM (+4 GB).
+  # The 60% rule keeps most expert reads on the GPU, so it favours smaller weights over slow RAM traffic.
   local kv
   for kv in f16 q8_0; do
     if (( $(nb_need_mb "$1" "$2" "$(kv_bytes $kv)") <= LC_BUDGET_MB )); then echo "$kv"; return 0; fi
   done
+  if (( LC_EXPERT_PCT > 0 )) && (( $1 * LC_EXPERT_PCT / 100 / 1048576 + 4096 <= AVAIL_RAM_MB )); then
+    for kv in f16 q8_0; do
+      if (( LC_BUDGET_MB - $(ram_gpu_mb "$1" "$2" "$kv") >= $1 * LC_EXPERT_PCT / 100 / 1048576 * MOE_MIN_CACHE_PCT / 100 )); then
+        echo "$kv+ram"; return 0
+      fi
+    done
+  fi
   return 0
 }
 best_quant() {   # $1 = ctx -> best quant that fits (respects QUANT), or nothing
@@ -586,6 +650,8 @@ else
   echo "Detected ${GPU_COUNT}x $GPU_NAME, $((FREE_MB/1024)) GB free VRAM"
 fi
 
+AVAIL_RAM_MB=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
+if (( DRY_RUN )) && [ -n "${SUMMON_RAM:-}" ]; then AVAIL_RAM_MB=$SUMMON_RAM; fi   # preview: SUMMON_RAM=65536
 INTERACTIVE=0; [ -t 0 ] && [ -t 1 ] && INTERACTIVE=1
 if (( INTERACTIVE && ! DRY_RUN )) && ! command -v whiptail >/dev/null; then
   apt_get whiptail >/dev/null 2>&1 || true   # optional: plain-text menus work too
@@ -611,21 +677,27 @@ if [ -z "${ENGINE:-}" ] || { [ "$ENGINE" = ollama ] && [ -z "${ONLY:-}" ]; }; th
   DEF_ENGINE="" LC_ITEMS=() OL_ITEMS=() ITEMS=()
   MENU_COLS=$(( $(tput cols 2>/dev/null || echo 124) - 4 )); (( MENU_COLS > 150 )) && MENU_COLS=150
   MENU_LINES=$(tput lines 2>/dev/null || echo 34)
-  DESC_W=$(( MENU_COLS - 12 - 28 - 2 - 16 - 2 )); (( DESC_W < 12 )) && DESC_W=12   # borders/indent + name + fit
+  DESC_W=$(( MENU_COLS - 12 - 28 - 2 - 17 - 2 )); (( DESC_W < 12 )) && DESC_W=12   # borders/indent + name + fit
   row() {   # $1 name, $2 fit, $3 description -> one spaced, width-safe menu line
     local d=$3; (( ${#d} > DESC_W )) && d="${d:0:DESC_W-3}..."
-    printf '%-28.28s  %-16s  %s' "$1" "$2" "$d"
+    printf '%-28.28s  %-17s  %s' "$1" "$2" "$d"
   }
+  DRAFT_USER=${DRAFT:-}
   for id in "${LC_MODEL_IDS[@]}"; do
-    lc_model "$id"; lc_budget
+    DRAFT=$DRAFT_USER; draft_auto "$id"; lc_model "$id"; lc_budget
     # Fit label like Ollama's: weights ~total VRAM @ context (128K, or the longest context that fits)
     q=$(best_quant 131072); c=131072
     if [ -z "$q" ]; then for c in "${LC_CTX_TIERS[@]}"; do q=$(best_quant "$c"); [ -n "$q" ] && break; done; fi
-    [ -z "$DEF_ENGINE" ] && [ "$c" = 131072 ] && [ -n "$q" ] && DEF_ENGINE=$id
+    kv=""
     if [ -n "$q" ]; then
       for e in "${LC_QUANTS[@]}"; do [ "${e%%|*}" = "$q" ] && b=$(echo "$e" | cut -d'|' -f2); done
       kv=$(fit_kv "$b" "$c")
-      fit="$q ~$(( ($(nb_need_mb "$b" "$c" "$(kv_bytes "$kv")") + LC_OVERHEAD_MB) / 1024 ))G@$((c/1024))K"
+    fi
+    # Pre-select only models that run fully on the GPU (experts in RAM work, but are slower and unmeasured)
+    [ -z "$DEF_ENGINE" ] && [ "$c" = 131072 ] && [ -n "$q" ] && [[ $kv != *+ram ]] && DEF_ENGINE=$id
+    if [ -n "$q" ]; then
+      if [[ $kv == *+ram ]]; then fit="$q +RAM@$((c/1024))K"
+      else fit="$q ~$(( ($(nb_need_mb "$b" "$c" "$(kv_bytes "$kv")") + LC_OVERHEAD_MB) / 1024 ))G@$((c/1024))K"; fi
     else
       lc_smallest=${LC_QUANTS[${#LC_QUANTS[@]}-1]}
       fit="TOO BIG ~$(( ($(nb_need_mb "$(echo "$lc_smallest" | cut -d'|' -f2)" 32768 "$LC_KV_Q8") + LC_OVERHEAD_MB) / 1024 ))G@32K"
@@ -634,10 +706,11 @@ if [ -z "${ENGINE:-}" ] || { [ "$ENGINE" = ollama ] && [ -z "${ONLY:-}" ]; }; th
       nanbeige) blurb="Lightweight agent for coding and research. AA index 20" ;;
       qwen38pi) blurb="Qwen3.8 + RL-tuned LoRA for the pi agent. No thinking" ;;
       ornith35b) blurb="Self-improving MoE for coding agents. 3B active, fast" ;;
-      ornith9b) blurb="Self-improving 9B: light, fast, 256K context on 24 GB cards" ;;
+      ornith9b) blurb="Self-improving 9B: light, fast, 256K on 24 GB cards" ;;
     esac
     LC_ITEMS+=("$id" "$(row "$LC_TITLE" "$fit" "$blurb")")
   done
+  DRAFT=$DRAFT_USER
   for i in "${!RANKS[@]}"; do OL_ITEMS+=("ol:$((i+1))" "$(row "${MNAME[i]}" "$(fit_label $i)" "${NOTE[i]}")"); done
   if (( MENU_LINES >= ${#LC_ITEMS[@]}/2 + ${#OL_ITEMS[@]}/2 + 3 + 11 )); then
     # (labels must not start with "-": whiptail would read them as options)
@@ -728,7 +801,101 @@ fetch_gguf() {   # $1 = repo URL, $2 = file, $3 = bytes, $4 = sha256 -> $DDIR/mo
   return 0
 }
 
+pad_draft() {   # $1 target file, $2 draft file, $3 draft sha256, $4 output: pad the draft's vocabulary, once
+  # Runs tools/pad_draft.py from github.com/dedene/Nanbeige4.3-33B-DGX-Spark (MIT, (c) its author) in a throwaway
+  # python:3.12-slim container with pinned gguf/numpy: the host gets nothing installed.
+  local out="$DDIR/models/$4" stamp="$DDIR/models/.$4.inputs" inputs="$3 gguf==0.19.0 numpy==2.5.4"
+  if [ -f "$out" ] && [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$inputs" ]; then echo "Already present: $out"; return 0; fi
+  rm -f "$out" "$out.part" "$stamp"
+  cat > "$DDIR/models/.pad_draft.py" <<'PADPY'
+"""Pad a drafter GGUF's vocabulary to the target's, so llama.cpp accepts it for speculative decoding.
+From github.com/dedene/Nanbeige4.3-33B-DGX-Spark (tools/pad_draft.py), MIT licence."""
+import sys
+
+import numpy as np
+from gguf import GGUFReader, GGUFValueType, GGUFWriter
+
+VOCAB_TENSORS = ("token_embd.weight", "output.weight")
+
+
+def value(field):
+    kind = field.types[0]
+    if kind == GGUFValueType.ARRAY:
+        if field.types[-1] == GGUFValueType.STRING:
+            return [bytes(field.parts[i]).decode("utf-8", errors="surrogateescape") for i in field.data]
+        return [field.parts[i].tolist()[0] for i in field.data]
+    if kind == GGUFValueType.STRING:
+        return bytes(field.parts[field.data[0]]).decode()
+    return field.parts[field.data[0]].tolist()[0]
+
+
+def copy_field(writer, name, field):
+    kind = field.types[0]
+    if kind == GGUFValueType.ARRAY and field.types[-1] == GGUFValueType.STRING:
+        writer.add_array(name, value(field))
+    elif kind == GGUFValueType.ARRAY:
+        writer.add_key_value(name, value(field), kind, sub_type=field.types[-1])
+    else:
+        writer.add_key_value(name, value(field), kind)
+
+
+def main(target_path, draft_path, out_path):
+    target, draft = GGUFReader(target_path), GGUFReader(draft_path)
+    tokens_tgt = value(target.fields["tokenizer.ggml.tokens"])
+    tokens_dft = value(draft.fields["tokenizer.ggml.tokens"])
+    n_tgt, n_dft = len(tokens_tgt), len(tokens_dft)
+    if n_tgt < n_dft or tokens_tgt[:n_dft] != tokens_dft:
+        sys.exit("the drafter's tokens are not a prefix of the target's: not the same tokenizer")
+    print(f"vocab {n_dft:,} -> {n_tgt:,}")
+    writer = GGUFWriter(out_path, arch=value(draft.fields["general.architecture"]))
+    for name, field in draft.fields.items():
+        if not (name.startswith(("GGUF.", "tokenizer.")) or name == "general.architecture"):
+            copy_field(writer, name, field)
+    for name, field in target.fields.items():
+        if name.startswith("tokenizer."):
+            copy_field(writer, name, field)
+    for tensor in draft.tensors:
+        data = np.asarray(tensor.data)
+        if tensor.name in VOCAB_TENSORS and int(tensor.shape[-1]) == n_dft:
+            data = np.concatenate([data, np.zeros((n_tgt - n_dft,) + data.shape[1:], dtype=data.dtype)])
+        writer.add_tensor(tensor.name, data, raw_dtype=tensor.tensor_type)
+    writer.write_header_to_file()
+    writer.write_kv_data_to_file()
+    writer.write_tensors_to_file()
+    writer.close()
+
+
+if __name__ == "__main__":
+    main(*sys.argv[1:])
+PADPY
+  echo "Padding the draft model's vocabulary to the target's (one-time, ~1-2 min)..."
+  docker run --rm -v "$DDIR/models:/m" python:3.12-slim sh -c \
+    "pip install -q --root-user-action=ignore --disable-pip-version-check gguf==0.19.0 numpy==2.5.4 && python /m/.pad_draft.py '/m/$1' '/m/$2' '/m/$4.part'" \
+    || { echo "Padding the draft model failed; rerun, or skip the draft model with DRAFT=off."; exit 1; }
+  [ "$(head -c 4 "$out.part" 2>/dev/null)" = GGUF ] || { echo "Padded draft is not a GGUF; rerun or use DRAFT=off."; exit 1; }
+  mv "$out.part" "$out"; echo "$inputs" > "$stamp"; rm -f "$DDIR/models/.pad_draft.py"
+  echo "Built $out"
+}
+
 install_llamacpp() {
+  lc_model "$1"; lc_budget
+  # --- Speed boost: the model's draft (MTP head / small draft model), when it has one ---
+  # Default (DRAFT unset): on when it doesn't lower the weights that fit at 128K; otherwise the user decides, with
+  # the trade-off shown and "No" pre-selected (precision first). DRAFT=on/off or CTX/QUANT skip the question.
+  if [ -n "$LC_DRAFT_KIND" ] && [ "${SPEC:-}" != off ] && [ -z "${DRAFT:-}" ]; then
+    draft_auto "$1"
+    if [ "$DRAFT" = off ] && (( INTERACTIVE )) && [ -z "${CTX:-}${QUANT:-}" ] && [ -n "$DRAFT_AUTO_ON" ]; then
+      local cost txt a
+      cost="no extra download"
+      [ -n "$LC_DRAFT" ] && cost="a $(( $(echo "$LC_DRAFT" | cut -d'|' -f2) / 1048576 )) MB download"
+      txt="Speed boost: $LC_DRAFT_TITLE.\nIt drafts tokens that $LC_TITLE then checks: $LC_DRAFT_GAIN.\nQuality stays the same on average; outputs aren't bit-identical to a run without it.\n\nCost: $cost + VRAM. On this card, $((DRAFT_AUTO_CTX/1024))K context would then fit $DRAFT_AUTO_ON weights instead of $DRAFT_AUTO_OFF (less precise)."
+      if (( HAS_WHIPTAIL )); then
+        if whiptail --backtitle "$BACKTITLE" --title "Draft model: speed vs precision" --defaultno --yesno "$txt\n\nTrade precision for speed?" 16 92; then DRAFT=on; fi
+      else
+        printf '%b\n' "$txt"; read -rp "Trade precision for speed? [y/N] " a || true; [[ $a == [yY]* ]] && DRAFT=on
+      fi
+    fi
+  fi
   lc_model "$1"; lc_budget
   if [ -n "${CTX:-}" ]; then
     [[ "$CTX" =~ ^[0-9]+$ ]] && (( CTX > 0 )) || { echo "CTX must be a positive number of tokens"; exit 1; }
@@ -769,7 +936,9 @@ install_llamacpp() {
     for c in "${LC_CTX_TIERS[@]}"; do
       q=$(best_quant "$c"); [ -n "$q" ] || continue
       for e in "${LC_QUANTS[@]}"; do [ "${e%%|*}" = "$q" ] && b=$(echo "$e" | cut -d'|' -f2); done
-      ITEMS+=("$c" "$(printf '%3dK context    best weights here: %-7s + %-4s cache' $((c / 1024)) "$q" "$(fit_kv "$b" "$c")")")
+      kv=$(fit_kv "$b" "$c")
+      ITEMS+=("$c" "$(printf '%3dK context    best weights here: %-7s + %-4s cache%s' $((c / 1024)) "$q" "${kv%+ram}" \
+        "$([[ $kv == *+ram ]] && echo ', experts in RAM')")")
     done
     CTX=$(choose "$LC_TITLE - ${GPU_COUNT}x $GPU_NAME, $((FREE_MB/1024)) GB" \
       "Step 1/2: context window. Reserving more costs VRAM (so smaller weights), not speed.\nSpeed drops with the tokens actually in a conversation, at any setting." \
@@ -782,9 +951,14 @@ install_llamacpp() {
       IFS='|' read -r q b s <<< "$e"
       kv=$(fit_kv "$b" "$CTX"); [ -n "$kv" ] || continue
       [ -n "$DEF_Q" ] || DEF_Q=$q
-      tot=$(( ($(nb_need_mb "$b" "$CTX" "$(kv_bytes "$kv")") + LC_OVERHEAD_MB) / 1024 ))
-      ITEMS+=("$q" "$(printf '%2d.%d GB weights + %-4s cache = ~%2d GB   speed ~%3d%% of %s' \
-        $((b / 1073741824)) $((b * 10 / 1073741824 % 10)) "$kv" "$tot" $((LC_REF_BYTES * 100 / b)) "$LC_REF_Q")")
+      if [[ $kv == *+ram ]]; then
+        ITEMS+=("$q" "$(printf '%2d.%d GB weights + %-4s cache = %s   experts in RAM: slower' \
+          $((b / 1073741824)) $((b * 10 / 1073741824 % 10)) "${kv%+ram}" "$(vram_text "$b" "$CTX" "$kv")")")
+      else
+        ITEMS+=("$q" "$(printf '%2d.%d GB weights + %-4s cache = %-5s GB   speed ~%3d%% of %s' \
+          $((b / 1073741824)) $((b * 10 / 1073741824 % 10)) "$kv" "$(vram_text "$b" "$CTX" "$kv" | tr -d G)" \
+          $((LC_REF_BYTES * 100 / b)) "$LC_REF_Q")")
+      fi
     done
     (( ${#ITEMS[@]} )) || { echo "Nothing fits at $((CTX/1024))K on this card; pick a shorter CTX."; exit 1; }
     QUANT=$(choose "$LC_TITLE at $((CTX/1024))K context" \
@@ -805,7 +979,15 @@ install_llamacpp() {
   fi
   IFS='|' read -r QUANT_SEL BYTES SHA CTX_SEL KV_SEL <<< "$PICK"
   ask_port
-  echo "Plan: $QUANT_SEL weights ($((BYTES/1073741824)) GB) + $KV_SEL K/V at $((CTX_SEL/1024))K context = ~$(( ($(nb_need_mb "$BYTES" "$CTX_SEL" "$(kv_bytes "$KV_SEL")") + LC_OVERHEAD_MB) / 1024 )) GB of $((FREE_MB/1024)) GB"
+  local KV_TYPE_SEL=${KV_SEL%+ram} EXPERTS_RAM=0 MOE_CACHE_MB=0
+  if [[ $KV_SEL == *+ram ]]; then
+    EXPERTS_RAM=1
+    MOE_CACHE_MB=$(( LC_BUDGET_MB - $(ram_gpu_mb "$BYTES" "$CTX_SEL" "$KV_SEL") ))
+    (( MOE_CACHE_MB > BYTES * LC_EXPERT_PCT / 100 / 1048576 )) && MOE_CACHE_MB=$(( BYTES * LC_EXPERT_PCT / 100 / 1048576 ))
+  fi
+  echo "Plan: $QUANT_SEL weights ($((BYTES/1073741824)) GB) + $KV_TYPE_SEL K/V at $((CTX_SEL/1024))K context = $(vram_text "$BYTES" "$CTX_SEL" "$KV_SEL")$( (( EXPERTS_RAM )) || echo " of $((FREE_MB/1024)) GB")"
+  (( EXPERTS_RAM )) && echo "      MoE experts in system RAM ($(( BYTES * LC_EXPERT_PCT / 100 / 1073741824 )) GB of $((AVAIL_RAM_MB/1024)) GB free); $(( MOE_CACHE_MB * 100 / (BYTES * LC_EXPERT_PCT / 100 / 1048576) ))% of them cached on the GPU ($((MOE_CACHE_MB/1024)) GB)"
+  (( LC_DRAFT_ON )) && echo "      Draft: $LC_DRAFT_TITLE ($LC_DRAFT_GAIN)"
   if (( DRY_RUN )); then
     echo
     echo "Would do (dry run, nothing done):"
@@ -815,16 +997,20 @@ install_llamacpp() {
     if [ -n "$LC_LORA" ]; then
       echo "     + LoRA adapter ${LC_LORA%%|*} ($(( $(echo "$LC_LORA" | cut -d'|' -f2) / 1048576 )) MB) from $(echo "$LC_LORA" | cut -d'|' -f4 | sed 's#/resolve/main##')"
     fi
+    if (( LC_DRAFT_ON )) && [ -n "$LC_DRAFT" ]; then
+      echo "     + draft ${LC_DRAFT%%|*} ($(( $(echo "$LC_DRAFT" | cut -d'|' -f2) / 1048576 )) MB) from $(echo "$LC_DRAFT" | cut -d'|' -f4 | sed 's#/resolve/main##')"
+      (( LC_DRAFT_PAD )) && echo "     + pad its vocabulary to the 33B's once (python:3.12-slim container, gguf 0.19.0)"
+    fi
     echo "  3. Pull $LC_IMAGE"
-    echo "  4. Start llama-server: $LC_TITLE $QUANT_SEL, -c $CTX_SEL, $KV_SEL cache, all layers on the GPU,"
-    echo "     temp ${TEMPERATURE} / top_p ${TOP_P}${TOP_K:+ / top_k $TOP_K}, n-gram speculation ${SPEC:-on}, host-RAM prompt cache"
+    echo "  4. Start llama-server: $LC_TITLE $QUANT_SEL, -c $CTX_SEL, $KV_TYPE_SEL cache, $( (( EXPERTS_RAM )) && echo "experts in RAM + ${MOE_CACHE_MB} MB GPU expert cache" || echo "all layers on the GPU"),"
+    echo "     temp ${TEMPERATURE} / top_p ${TOP_P}${TOP_K:+ / top_k $TOP_K}, speculation: $( [ "${SPEC:-}" = off ] && echo off || { (( LC_DRAFT_ON )) && echo "$LC_DRAFT_KIND draft + n-gram" || echo n-gram; }), host-RAM prompt cache"
     [ -n "$LC_KWARGS" ] && echo "     chat template: $LC_KWARGS"
     echo "  5. Access: $(access_text)"
     echo "  6. Wait for /health, then test a tool call"
     echo
     echo "Endpoint: http://$HOST_HINT:$PORT/v1   model: $LC_ALIAS   context window: $CTX_SEL"
     echo "Run it for real:       $0 $LC_ID $PORT"
-    echo "Same, without menus:   CTX=$CTX_SEL QUANT=$QUANT_SEL $0 $LC_ID $PORT"
+    echo "Same, without menus:   CTX=$CTX_SEL QUANT=$QUANT_SEL DRAFT=$( (( LC_DRAFT_ON )) && echo on || echo off) $0 $LC_ID $PORT"
     return 0
   fi
 
@@ -865,7 +1051,7 @@ install_llamacpp() {
   echo "Docker OK: $(docker --version). Data folder: $DDIR"
 
   # --- Model download(s): the weights, plus the LoRA adapter if the model has one ---
-  local FILE="$LC_FILE_PREFIX-$QUANT_SEL.gguf" LORA_FILE="" LORA_BYTES LORA_SHA LORA_REPO
+  local FILE="$LC_FILE_PREFIX-$QUANT_SEL.gguf" LORA_FILE="" LORA_BYTES LORA_SHA LORA_REPO DRAFT_FILE="" DRAFT_SRC=""
   mkdir -p "$DDIR/models"
   docker pull -q "$LC_IMAGE" >/dev/null 2>&1 & local PULL_PID=$!   # pull the ~3 GB image during the download
   fetch_gguf "$LC_REPO" "$FILE" "$BYTES" "$SHA"
@@ -873,8 +1059,15 @@ install_llamacpp() {
     IFS='|' read -r LORA_FILE LORA_BYTES LORA_SHA LORA_REPO <<< "$LC_LORA"
     fetch_gguf "$LORA_REPO" "$LORA_FILE" "$LORA_BYTES" "$LORA_SHA"
   fi
+  if (( LC_DRAFT_ON )) && [ -n "$LC_DRAFT" ]; then
+    local D_FILE D_BYTES D_SHA D_REPO
+    IFS='|' read -r D_FILE D_BYTES D_SHA D_REPO <<< "$LC_DRAFT"
+    fetch_gguf "$D_REPO" "$D_FILE" "$D_BYTES" "$D_SHA"
+    DRAFT_SRC=$D_FILE DRAFT_FILE=$D_FILE
+    if (( LC_DRAFT_PAD )); then DRAFT_FILE="${D_FILE%.gguf}.pad.gguf"; pad_draft "$FILE" "$D_FILE" "$D_SHA" "$DRAFT_FILE"; fi
+  fi
   local OTHERS
-  OTHERS=$(ls "$DDIR/models" | grep -vxF -e "$FILE" -e "${LORA_FILE:-//}" || true)
+  OTHERS=$(ls "$DDIR/models" | grep -vxF -e "$FILE" -e "${LORA_FILE:-//}" -e "${DRAFT_SRC:-//}" -e "${DRAFT_FILE:-//}" || true)
   [ -n "$OTHERS" ] && echo "Other model files in $DDIR/models (kept, switching back is instant): $OTHERS"
 
   # --- Start (or replace) the server ---
@@ -892,11 +1085,25 @@ install_llamacpp() {
   if [ -n "$TOP_K" ]; then SERVER_ARGS+=(--top-k "$TOP_K"); fi
   if [ -n "$LC_KWARGS" ]; then SERVER_ARGS+=(--chat-template-kwargs "$LC_KWARGS"); fi
   if [ -n "$LORA_FILE" ]; then SERVER_ARGS+=(--lora "/models/$LORA_FILE"); fi
-  # n-gram self-speculative decoding: drafts from text already in the context, verified by the model, so the
-  # output is identical. Pays off when the agent re-types code it has seen. No draft model, no extra VRAM.
-  if [ "${SPEC:-ngram-mod}" != off ]; then
-    SERVER_ARGS+=(--spec-type ngram-mod --spec-ngram-mod-n-match 24 --spec-ngram-mod-n-min 16 --spec-ngram-mod-n-max 48)
+  # Speculative decoding: the model's draft (MTP head or a small draft model) plus n-gram drafts from text already
+  # in the context. The model verifies every drafted token: quality holds on average, but outputs aren't
+  # bit-identical (batched verification changes float rounding). SPEC=off turns all of it off.
+  if [ "${SPEC:-}" != off ]; then
+    local SPEC_TYPES=ngram-mod
+    if (( LC_DRAFT_ON )); then
+      case "$LC_DRAFT_KIND" in
+        model) SPEC_TYPES=draft-simple,ngram-mod
+               SERVER_ARGS+=(-md "/models/$DRAFT_FILE" --spec-draft-ngl all --spec-draft-n-max 4 --spec-draft-p-min 0.6) ;;
+        mtp)   SPEC_TYPES=draft-mtp,ngram-mod; SERVER_ARGS+=(-md "/models/$DRAFT_FILE" --spec-draft-n-max 2) ;;
+        mtp-inline) SPEC_TYPES=draft-mtp,ngram-mod; SERVER_ARGS+=(--spec-draft-n-max 2) ;;
+      esac
+      SERVER_ARGS+=(-ctkd "$KV_TYPE_SEL" -ctvd "$KV_TYPE_SEL")
+    fi
+    SERVER_ARGS+=(--spec-type "$SPEC_TYPES" --spec-ngram-mod-n-match 24 --spec-ngram-mod-n-min 16 --spec-ngram-mod-n-max 48)
   fi
+  # MoE experts in system RAM: --cpu-moe keeps all routed experts on the CPU side, --moe-cache-mib caches the hot
+  # ones on the GPU (llama.cpp leaves that cache off by default, which roughly halves throughput).
+  if (( EXPERTS_RAM )); then SERVER_ARGS+=(--cpu-moe --moe-cache-mib "$MOE_CACHE_MB"); fi
   # -ngl 999 + --fit off: every layer on the GPU or fail loudly (no silent CPU offload, no silently smaller -c).
   # -ctv q8_0 needs Flash Attention (-fa on). -np 1: one slot, the whole context for one conversation.
   # --cache-reuse: reuse cached K/V chunks when an agent edits earlier messages. --jinja: native XML tool calls.
@@ -904,7 +1111,7 @@ install_llamacpp() {
     -v "$DDIR/models:/models:ro" -p "$BIND:$PORT:8080" "$LC_IMAGE" \
     -m "/models/$FILE" --alias "$LC_ALIAS" --host 0.0.0.0 --port 8080 \
     --jinja \
-    -c "$CTX_SEL" -np 1 -ngl 999 --fit off -fa on -ctk "$KV_SEL" -ctv "$KV_SEL" \
+    -c "$CTX_SEL" -np 1 -ngl 999 --fit off -fa on -ctk "$KV_TYPE_SEL" -ctv "$KV_TYPE_SEL" \
     --cache-reuse 256 --temp "$TEMPERATURE" --top-p "$TOP_P" "${SERVER_ARGS[@]}" >/dev/null
 
   echo "Loading the model (1-3 min)..."
@@ -933,9 +1140,10 @@ install_llamacpp() {
 
   echo
   echo "Done. $LC_TITLE $QUANT_SEL is serving on $BIND:$PORT (OpenAI API, llama.cpp)"
-  echo "  Context:     $CTX_SEL tokens, $KV_SEL K/V cache, all layers on the GPU (VRAM used: $VRAM)"
+  echo "  Context:     $CTX_SEL tokens, $KV_TYPE_SEL K/V cache (VRAM used: $VRAM)"
   echo "  Sampling:    temp $TEMPERATURE / top_p $TOP_P${TOP_K:+ / top_k $TOP_K}${THINK_BUDGET:+, thinking capped at $THINK_BUDGET tokens}"
-  echo "  Speculation: ${SPEC:-ngram-mod} (n-gram drafts from the context; SPEC=off to disable)"
+  echo "  Speculation: $( [ "${SPEC:-}" = off ] && echo off || { (( LC_DRAFT_ON )) && echo "$LC_DRAFT_TITLE + n-gram drafts" || echo "n-gram drafts"; }) (SPEC=off: reproducible runs)"
+  (( EXPERTS_RAM )) && echo "  MoE experts: in system RAM, ${MOE_CACHE_MB} MB of hot experts cached on the GPU"
   echo "  Tool calls:  $TOOLS"
   echo "  Base URL:    http://$HOST_HINT:$PORT/v1     model: $LC_ALIAS     api key: any string"
   echo "  Access:      $(access_text)"
