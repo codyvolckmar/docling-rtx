@@ -11,6 +11,7 @@
 - **MoE experts in system RAM.** Mixture-of-experts models that don't fit VRAM run with their routed experts in RAM and the hot ones cached on the GPU (`--cpu-moe` + `--moe-cache-mib`, which llama.cpp leaves off by default). Ornith 1.5 35B now runs on a 24 GB card (Q6_K at 128K with ~30 GB free RAM). Offered only when the GPU cache holds >= 60% of the experts; shown as `+RAM`; never pre-selected.
 - **Accuracy fix:** speculative decoding was described as lossless. Quality holds on average, but outputs aren't bit-identical (batched verification changes float rounding); docs and messages now say so.
 - Dry runs can preview another machine's RAM: `SUMMON_RAM=65536`.
+- llama.cpp models serve Prometheus metrics at `/metrics` (`--metrics`): tokens/s, draft acceptance, cache use. Same port and access rules as the API.
 
 ## v1.0.1 (2026-11-19)
 

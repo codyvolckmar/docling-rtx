@@ -1034,7 +1034,7 @@ install_llamacpp() {
     echo "     temp ${TEMPERATURE} / top_p ${TOP_P}${TOP_K:+ / top_k $TOP_K}, speculation: $( [ "${SPEC:-}" = off ] && echo off || { (( LC_DRAFT_ON )) && echo "$LC_DRAFT_KIND draft + n-gram" || echo n-gram; }), host-RAM prompt cache"
     [ -n "$LC_KWARGS" ] && echo "     chat template: $LC_KWARGS"
     echo "  5. Access: $(access_text)"
-    echo "  6. Wait for /health, then test a tool call"
+    echo "  6. Wait for /health, then test a tool call. Metrics at /metrics (Prometheus format)"
     echo
     echo "Endpoint: http://$HOST_HINT:$PORT/v1   model: $LC_ALIAS   context window: $CTX_SEL"
     echo "Run it for real:       $0 $LC_ID $PORT"
@@ -1108,7 +1108,9 @@ install_llamacpp() {
   local AVAIL_MB CACHE_RAM_MB SERVER_ARGS
   AVAIL_MB=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
   CACHE_RAM_MB=$(( AVAIL_MB / 2 )); (( CACHE_RAM_MB < 8192 )) && CACHE_RAM_MB=8192
-  SERVER_ARGS=(--cache-ram "$CACHE_RAM_MB")
+  # --metrics: Prometheus-format stats at /metrics (tokens/s, prompt and decode counts, draft acceptance, KV use).
+  # Same port and access rules as the API: local mode / your IP only.
+  SERVER_ARGS=(--cache-ram "$CACHE_RAM_MB" --metrics)
   if [ -n "${THINK_BUDGET:-}" ]; then SERVER_ARGS+=(--reasoning-budget "$THINK_BUDGET"); fi
   if [ -n "$TOP_K" ]; then SERVER_ARGS+=(--top-k "$TOP_K"); fi
   if [ -n "$LC_KWARGS" ]; then SERVER_ARGS+=(--chat-template-kwargs "$LC_KWARGS"); fi
@@ -1177,6 +1179,7 @@ install_llamacpp() {
   echo "  Access:      $(access_text)"
   echo "  Clients:     set the context window to $CTX_SEL; one request at a time (others queue)"
   echo "  Prompt cache: up to $((CACHE_RAM_MB/1024)) GB of host RAM keeps conversations across side requests"
+  echo "  Metrics:     http://$HOST_HINT:$PORT/metrics   (Prometheus format: tok/s, draft acceptance, cache use)"
   echo "  Logs:        docker logs -f $LC_NAME          Monitor: btop / nvidia-smi"
 }
 
