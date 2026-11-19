@@ -1,6 +1,6 @@
 # Summon
 
-**AI · Open-source · Private · Intelligence**
+**AI · Open-source · Private · Intelligence**  ·  v1.0.1 ([changelog](CHANGELOG.md))
 
 One command turns your NVIDIA GPU into a private AI with an OpenAI-compatible API. Summon picks the model, weights and context that fit your card, verifies the download, keeps the port private and tests tool calling before it hands you the URL. No cloud, no API bill, nobody else's servers.
 

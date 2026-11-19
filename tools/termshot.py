@@ -341,9 +341,9 @@ if __name__ == '__main__':
     env = dict(base, SUMMON_GPU='NVIDIA RTX A6000:49140')
     run(f'cd {root}; clear; echo "$ ./summon.sh --dry-run"; "{S}" --dry-run; sleep 30', env, [
         ('until', r'Which AI', 15), ('shot', '01-model-menu-a6000.png', 'summon.sh --dry-run  (RTX A6000, 48 GB)'),
-        ('key', ENTER), ('until', r'Port for the AI', 10), ('shot', '02-port.png', 'summon.sh --dry-run  (RTX A6000, 48 GB)'),
         ('key', ENTER), ('until', r'Step 1/2', 10), ('shot', '03-context-menu.png', 'summon.sh --dry-run  (RTX A6000, 48 GB)'),
         ('key', ENTER), ('until', r'Step 2/2', 10), ('shot', '04-weights-menu.png', 'summon.sh --dry-run  (RTX A6000, 48 GB)'),
+        ('key', ENTER), ('until', r'Last step: port', 10), ('shot', '02-port.png', 'summon.sh --dry-run  (RTX A6000, 48 GB)'),
         ('key', ENTER), ('until', r'Same, without menus', 10), ('shot', '05-dry-run-plan.png', 'summon.sh --dry-run  (RTX A6000, 48 GB)'),
     ], out)
     # 2) RTX 3090: the model menu pre-selects Ornith 9B

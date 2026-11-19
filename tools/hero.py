@@ -11,9 +11,9 @@ B = '/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf'
 R = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
 RB = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 PANELS = [   # one merged menu, two cards: the same models, re-sized to the VRAM each card has
-    ('01-model-menu-a6000.png', (40, 140, 1240, 520), '48 GB card', ['Nanbeige 4.3 33B', '128K · Q6_K'],
+    ('01-model-menu-a6000.png', (40, 118, 1240, 560), '48 GB card', ['Nanbeige 4.3 33B', '128K · Q6_K'],
      'Pre-selected. 14 models,\nllama.cpp + Ollama, one list'),
-    ('06-model-menu-3090.png', (40, 140, 1240, 520), '24 GB card', ['Ornith 1.5 9B', '128K · Q8_0'],
+    ('06-model-menu-3090.png', (40, 118, 1240, 560), '24 GB card', ['Ornith 1.5 9B', '128K · Q8_0'],
      'Same list, re-sized: knows\nwhat fits and what won\'t'),
 ]
 
@@ -35,7 +35,7 @@ img.paste(grad, (0, 0), mask)
 d.text((330, 54), 'AI · OPEN-SOURCE · PRIVATE · INTELLIGENCE', font=tag, fill=(111, 214, 234))
 d.text((330, 82), 'One command turns your NVIDIA GPU into a private, OpenAI-compatible AI.', font=cap, fill=(214, 206, 228))
 
-PW, y = 960, 150
+PW, y = 840, 150
 for name, box, eng, models, note in PANELS:
     im = Image.open(os.path.join(IMG, name)).convert('RGB').crop(box)
     ph = int(im.height * PW / im.width)

@@ -17,7 +17,7 @@
 #                                            SUMMON_GPU="RTX 3090:24576" previews another card (dry runs only)
 #   ./summon.sh --lock [PORT]                re-lock the port to your current IP (new home IP / after a reboot)
 #   ./summon.sh --uninstall [llamacpp|ollama] [-y]   remove one engine (or both) and its model files
-#   ./summon.sh --help                       this text
+#   ./summon.sh --help | --version           this text / the version
 # Access: over SSH (rented pods) the port is locked to the IP you SSH in from. On your own PC (no SSH session)
 # the server only listens on 127.0.0.1. ALLOW_IP=1.2.3.4,5.6.7.0/24 shares it with those, ALLOW_IP=any opens it.
 #
@@ -32,6 +32,7 @@
 #   OLLAMA_KV_CACHE_TYPE=q8_0      halve K/V memory (global: affects every model)
 set -e
 export DEBIAN_FRONTEND=noninteractive
+SUMMON_VERSION=1.0.1
 
 # ======================================================================================================
 # llama.cpp models (one runs at a time; all share the image, container, data folder and server tuning)
@@ -168,18 +169,22 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
 # GGUF: qwen35, 64 layers, full attention every 4th, 4 KV heads x (256 K + 256 V) -> 64 KB/token at f16. Ollama
 # ships the qwen3.8 renderer + qwen3.5 parser (tools, thinking, vision); its thinking default is "medium", but the
 # adapter was trained with thinking off, so clients should send think:false. Too big for 24 GB cards.
-# "rank|Q8 ref|Q4 ref|KV KB/token|fixed MB|caps|name|good at"   (rank "-" = community / HF model, opt-in)
+# AA data behind the ranking (2026-11-16): Qwen3.8 27B LCR .82 II20 hall 29% (lowest) | Muse Glimmer LCR .83 (top)
+# II6 hall 84% | Qwen3.6 35B-A3B LCR .72 tau2 .95 (best tool calling) | Gemma 4 31B LCR .70 IFBench .76 tau2 .60 |
+# K2 Horizon 36B-A4B LCR .72, 512K | K2 Horizon 7B LCR .70.
+# Descriptions: each model's own summary (ollama.com / Hugging Face page), shortened for the menu (2026-11-19).
+# "rank|Q8 ref|Q4 ref|KV KB/token|fixed MB|caps|name|description"   (rank "-" = community / HF model, opt-in)
 OL_MODELS=(
-  "1|qwen3.8:27b-q8_0|qwen3.8:27b-q4_K_M|64|0|TVR|Qwen3.8 27B|LCR.82 II20 hall 29% (lowest). Best all-rounder: coding, research, agentic, vision"
-  "2|muse-glimmer:30b-q8_0|muse-glimmer:30b-q4_K_M|13|80|TVR|Muse Glimmer 30B|LCR.83 (top) II6 hall 84%. Long agent loops, tool use, failure recovery"
-  "3|qwen3.6:35b-a3b-q8_0|qwen3.6:35b-a3b-q4_K_M|20|0|TVR|Qwen3.6 35B-A3B|LCR.72 tau2 .95 (best tool calling). Fast MoE, 3B active, vision"
-  "4|gemma4:31b-it-q8_0|gemma4:31b-it-qat|80|1600|TVR|Gemma 4 31B|LCR.70 IFBench .76 (best instruction following) tau2 .60, vision"
-  "5|ifm/k2-horizon:36b-q8_0|ifm/k2-horizon:36b-q4_K_M|192|0|T-R|K2 Horizon MoVA 36B-A4B|LCR.72. 512K native context, fast MoE (4B active), text only"
-  "6|ifm/k2-horizon:7b-q8_0|ifm/k2-horizon:7b-q4_K_M|144|0|T-R|K2 Horizon 7B|LCR.70 at 7B. Budget pick for cheap GPUs, text only"
-  "-|robit/qwen3.8-27b-obliterated-e03:27b||64|0|TVR|Qwen3.8 27B obliterated (Q4)|Uncensored Qwen3.8. Abliteration costs some coherence"
-  "-|robit/qwen3.8-27b-e03-pi-adapted:q8_0||64|0|TVR|Qwen3.8 27B E03 pi (Q8)|pi-tuned E03 merge: run with think:false"
-  "-|hf.co/bottlecapai/ThinkingCap-Qwen3.8-27B-GGUF:Q8_0|hf.co/bottlecapai/ThinkingCap-Qwen3.8-27B-GGUF:Q4_K_M|64|0|TVR|ThinkingCap Qwen3.8 27B|37% less thinking, -0.86pp; MTP head, PolyForm Small Business licence"
-  "-|hf.co/ukisai/Swift-1.5-Qwen3.8-27B-GGUF:Q8_0|hf.co/ukisai/Swift-1.5-Qwen3.8-27B-GGUF:Q4_K_M|64|0|TVR|Swift 1.5 Qwen3.8 27B|25-54% less thinking, +0.35% score; Swift Open Licence (<= US\$1M revenue)"
+  "1|qwen3.8:27b-q8_0|qwen3.8:27b-q4_K_M|64|0|TVR|Qwen3.8 27B|Coding, research and long-horizon agentic tasks. Vision"
+  "2|muse-glimmer:30b-q8_0|muse-glimmer:30b-q4_K_M|13|80|TVR|Muse Glimmer 30B|Meta's open model for always-on local agents and tool use"
+  "3|qwen3.6:35b-a3b-q8_0|qwen3.6:35b-a3b-q4_K_M|20|0|TVR|Qwen3.6 35B-A3B|Agentic coding with thinking preservation. Fast MoE"
+  "4|gemma4:31b-it-q8_0|gemma4:31b-it-qat|80|1600|TVR|Gemma 4 31B|Google: reasoning, agentic workflows, coding, multimodal"
+  "5|ifm/k2-horizon:36b-q8_0|ifm/k2-horizon:36b-q4_K_M|192|0|T-R|K2 Horizon MoVA 36B-A4B|IFM open agentic MoE: reasons, calls tools, 512K context"
+  "6|ifm/k2-horizon:7b-q8_0|ifm/k2-horizon:7b-q4_K_M|144|0|T-R|K2 Horizon 7B|IFM open agentic 7B with 512K context. Budget pick"
+  "-|robit/qwen3.8-27b-obliterated-e03:27b||64|0|TVR|Qwen3.8 27B obliterated (Q4)|Unshackled (uncensored) Qwen3.8 27B via Obliteratus"
+  "-|robit/qwen3.8-27b-e03-pi-adapted:q8_0||64|0|TVR|Qwen3.8 27B E03 pi (Q8)|Obliterated E03 + pi LoRA for the pi agent. Think off"
+  "-|hf.co/bottlecapai/ThinkingCap-Qwen3.8-27B-GGUF:Q8_0|hf.co/bottlecapai/ThinkingCap-Qwen3.8-27B-GGUF:Q4_K_M|64|0|TVR|ThinkingCap Qwen3.8 27B|Qwen3.8 that thinks 37% less, -0.86 pts. PolyForm SB"
+  "-|hf.co/ukisai/Swift-1.5-Qwen3.8-27B-GGUF:Q8_0|hf.co/ukisai/Swift-1.5-Qwen3.8-27B-GGUF:Q4_K_M|64|0|TVR|Swift 1.5 Qwen3.8 27B|Qwen3.8 with 25-54% less thinking. Swift licence (<= US\$1M)"
 )
 # Hugging Face GGUF refs have no Ollama registry manifest: exact sizes in MiB from the HF file list (2026-11-17).
 declare -A HF_MB=(
@@ -201,7 +206,7 @@ apt_get() {   # install packages; runs apt-get update once per run first (fresh 
 }
 
 # --- Branding: banner + whiptail theme (your own NEWT_COLORS wins) ---
-BACKTITLE="SUMMON  -  AI . Open-source . Private . Intelligence"
+BACKTITLE="SUMMON v$SUMMON_VERSION  -  AI . Open-source . Private . Intelligence"
 export NEWT_COLORS=${NEWT_COLORS:-'root=brightmagenta,black roottext=brightmagenta,black window=white,black border=magenta,black title=brightmagenta,black textbox=white,black listbox=white,black actlistbox=black,magenta sellistbox=brightmagenta,black actsellistbox=black,brightmagenta checkbox=brightmagenta,black actcheckbox=black,magenta button=black,magenta actbutton=white,brightmagenta compactbutton=white,black entry=white,black disentry=gray,black emptyscale=,black fullscale=,magenta helpline=white,black'}
 banner() {
   local c1="" c2="" c3="" r="" utf=0
@@ -224,7 +229,7 @@ banner() {
   else
     printf '%s\n' "${c2}   *  S U M M O N  *${r}" "${c3}   AI . Open-source . Private . Intelligence${r}"
   fi
-  echo "${c3}   Summoning your own LLM onto this GPU. No cloud, no API bill, nobody else's servers.${r}"
+  echo "${c3}   Summoning your own LLM onto this GPU. No cloud, no API bill, nobody else's servers.  v$SUMMON_VERSION${r}"
   echo
 }
 
@@ -234,8 +239,9 @@ choose() {   # $1 = title, $2 = text, $3 = default tag, then tag/label pairs -> 
   if command -v whiptail >/dev/null; then
     local w=$(( $(tput cols 2>/dev/null || echo 110) - 4 )) h lh rows=$(( $# / 2 ))
     (( w > ${CHOOSE_W:-110} )) && w=${CHOOSE_W:-110}
-    h=$(( rows + 12 )); (( h > $(tput lines 2>/dev/null || echo 40) - 2 )) && h=$(( $(tput lines 2>/dev/null || echo 40) - 2 ))
-    lh=$(( h - 12 )); (( lh < 3 )) && lh=3; (( lh > rows )) && lh=$rows
+    local chrome=$(( 10 + ${CHOOSE_TEXTLINES:-2} ))   # borders, buttons, blank lines + the prompt text
+    h=$(( rows + chrome )); (( h > $(tput lines 2>/dev/null || echo 40) - 2 )) && h=$(( $(tput lines 2>/dev/null || echo 40) - 2 ))
+    lh=$(( h - chrome )); (( lh < 3 )) && lh=3; (( lh > rows )) && lh=$rows
     whiptail --backtitle "$BACKTITLE" --title "$title" ${CHOOSE_NOTAGS:+--notags} --default-item "$def" \
       --menu "$text" "$h" "$w" "$lh" "$@" 3>&1 1>&2 2>&3
     return
@@ -268,7 +274,7 @@ lock_port() {   # $1 = external port, $2 = docker|host
   [ "$2" = docker ] && parent=DOCKER-USER
   if [ -z "$allow" ]; then
     allow=${SSH_CLIENT%% *}; [ -n "$allow" ] || allow=${SSH_CONNECTION%% *}
-    if [ -z "$allow" ]; then read -rp "Public IP allowed to use port $port (blank = open to everyone): " allow; fi
+    if [ -z "$allow" ]; then read -rp "Public IP allowed to use port $port (blank = open to everyone): " allow || true; fi
     # A private source address means the provider NATs inbound traffic: every client would look the same.
     if [[ $allow =~ ^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.) ]]; then
       echo "WARNING: your SSH session comes from a private address ($allow), so this host can't see real client IPs."
@@ -362,6 +368,7 @@ while (( $# )); do
     --lock) ACTION=lock ;;
     --verify) VERIFY_SHA256=1 ;;
     --dry-run) DRY_RUN=1 ;;
+    --version) echo "summon $SUMMON_VERSION"; exit 0 ;;
     -h|--help) sed -n '2,/^set -e/p' "$0" | sed -e '/^set -e/d' -e 's/^# \{0,1\}//'; exit 0 ;;
     -y) YES=1 ;;
     nanbeige|qwen38pi|ornith35b|ornith9b|ollama|llamacpp|llama.cpp) TARGET=$1 ;;
@@ -394,7 +401,7 @@ if [ "$ACTION" = uninstall ]; then
   fi
   USED=$(du -shc "${DIRS[@]}" 2>/dev/null | tail -1 | cut -f1)
   if (( ! YES )); then
-    read -rp "Remove ${TARGET:-llama.cpp and Ollama} and DELETE the model files in ${DIRS[*]:-(none)} (~${USED:-0})? [y/N] " a
+    read -rp "Remove ${TARGET:-llama.cpp and Ollama} and DELETE the model files in ${DIRS[*]:-(none)} (~${USED:-0})? [y/N] " a || true
     [[ $a == [yY]* ]] || { echo "Cancelled."; exit 0; }
   fi
   if [ "$TARGET" != ollama ]; then
@@ -450,6 +457,17 @@ mount_ok() {   # $1 = folder: can a container see a file in it?
   mkdir -p "$1" && echo ok > "$1/.mount-probe"
   docker run --rm -v "$1:/p" busybox cat /p/.mount-probe 2>/dev/null | grep -qx ok
   local r=$?; rm -f "$1/.mount-probe"; [ "$new" = 1 ] && [ "$r" != 0 ] && rmdir "$1" 2>/dev/null; return $r
+}
+
+ask_port() {   # the last question: which port to serve on (skipped when given as an argument)
+  [ -n "$PORT" ] && return 0
+  if (( HAS_WHIPTAIL && INTERACTIVE )); then
+    PORT=$(whiptail --backtitle "$BACKTITLE" --title "Port" --inputbox "Last step: port for the AI endpoint on this machine:" 9 60 20001 3>&1 1>&2 2>&3) || { echo "Cancelled."; exit 0; }
+  else
+    read -rp "Port for the AI endpoint on this machine [20001]: " PORT || true   # no terminal: the default
+    PORT=${PORT:-20001}
+  fi
+  [[ "$PORT" =~ ^[0-9]+$ ]] && (( PORT >= 1 && PORT <= 65535 )) || { echo "Invalid port: '$PORT'"; exit 1; }
 }
 
 # --- Ollama: sizes and fit for every model in OL_MODELS (registry lookups, no installs) ---
@@ -583,9 +601,16 @@ esac
 OL_PICK=""
 if [ -z "${ENGINE:-}" ] || [ "$ENGINE" = ollama ]; then ol_prepare; fi
 if [ -z "${ENGINE:-}" ] || { [ "$ENGINE" = ollama ] && [ -z "${ONLY:-}" ]; }; then
-  DEF_ENGINE="" ITEMS=()
-  NOTE_W=$(( $(tput cols 2>/dev/null || echo 124) - 4 )); (( NOTE_W > 150 )) && NOTE_W=150
-  NOTE_W=$(( NOTE_W - 70 )); (( NOTE_W < 16 )) && NOTE_W=16   # name + engine + fit + padding take ~70 columns
+  # Spaced layout: an engine header per group and a gap between the groups (header rows can't be picked). Short
+  # terminals get the compact list instead, so everything stays on one screen; descriptions are cut to the width.
+  DEF_ENGINE="" LC_ITEMS=() OL_ITEMS=() ITEMS=()
+  MENU_COLS=$(( $(tput cols 2>/dev/null || echo 124) - 4 )); (( MENU_COLS > 150 )) && MENU_COLS=150
+  MENU_LINES=$(tput lines 2>/dev/null || echo 34)
+  DESC_W=$(( MENU_COLS - 12 - 28 - 2 - 16 - 2 )); (( DESC_W < 12 )) && DESC_W=12   # borders/indent + name + fit
+  row() {   # $1 name, $2 fit, $3 description -> one spaced, width-safe menu line
+    local d=$3; (( ${#d} > DESC_W )) && d="${d:0:DESC_W-3}..."
+    printf '%-28.28s  %-16s  %s' "$1" "$2" "$d"
+  }
   for id in "${LC_MODEL_IDS[@]}"; do
     lc_model "$id"; lc_budget
     # Fit label like Ollama's: weights ~total VRAM @ context (128K, or the longest context that fits)
@@ -600,25 +625,35 @@ if [ -z "${ENGINE:-}" ] || { [ "$ENGINE" = ollama ] && [ -z "${ONLY:-}" ]; }; th
       lc_smallest=${LC_QUANTS[${#LC_QUANTS[@]}-1]}
       fit="TOO BIG ~$(( ($(nb_need_mb "$(echo "$lc_smallest" | cut -d'|' -f2)" 32768 "$LC_KV_Q8") + LC_OVERHEAD_MB) / 1024 ))G@32K"
     fi
-    case "$id" in
-      nanbeige) blurb="Best agentic coding (AA index 20). Text only" ;;
-      qwen38pi) blurb="Qwen3.8 + LoRA tuned for the pi agent, no thinking. Vendor-tested" ;;
-      ornith35b) blurb="Fast MoE, 3B active. Vendor-tested" ;;
-      ornith9b) blurb="Fast 9B, 256K on 24 GB cards. Vendor-tested" ;;
+    case "$id" in   # the model's own summary (model card), shortened
+      nanbeige) blurb="Lightweight agent for coding and research. AA index 20" ;;
+      qwen38pi) blurb="Qwen3.8 + RL-tuned LoRA for the pi agent. No thinking" ;;
+      ornith35b) blurb="Self-improving MoE for coding agents. 3B active, fast" ;;
+      ornith9b) blurb="Self-improving 9B: light, fast, 256K context on 24 GB cards" ;;
     esac
-    ITEMS+=("$id" "$(printf '%-28.28s %-9s %-16s %.*s' "$LC_TITLE" llama.cpp "$fit" "$NOTE_W" "$blurb")")
+    LC_ITEMS+=("$id" "$(row "$LC_TITLE" "$fit" "$blurb")")
   done
-  for i in "${!RANKS[@]}"; do
-    ITEMS+=("ol:$((i+1))" "$(printf '%-28.28s %-9s %-16s %.*s' "${MNAME[i]}" Ollama "$(fit_label $i)" "$NOTE_W" "${NOTE[i]}")")
-  done
+  for i in "${!RANKS[@]}"; do OL_ITEMS+=("ol:$((i+1))" "$(row "${MNAME[i]}" "$(fit_label $i)" "${NOTE[i]}")"); done
+  if (( MENU_LINES >= ${#LC_ITEMS[@]}/2 + ${#OL_ITEMS[@]}/2 + 3 + 11 )); then
+    # (labels must not start with "-": whiptail would read them as options)
+    ITEMS=(_h1 "== llama.cpp  .  tuned per model, verified downloads ================================="
+           "${LC_ITEMS[@]}" _gap " "
+           _h2 "== Ollama  .  pulled from ollama.com, sized to this card ============================="
+           "${OL_ITEMS[@]}")
+  else
+    ITEMS=("${LC_ITEMS[@]}" "${OL_ITEMS[@]}")
+  fi
   (( REC >= 0 )) && [ -z "$DEF_ENGINE" ] && DEF_ENGINE="ol:$((REC+1))"
   [ "$ENGINE" = ollama ] && DEF_ENGINE="ol:$((REC >= 0 ? REC+1 : 1))"
   DEF_ENGINE=${DEF_ENGINE:-nanbeige}
   if [ -n "${CTX:-}" ] || [ -n "${QUANT:-}" ] || (( ! INTERACTIVE )); then PICKED=$DEF_ENGINE
   else
-    PICKED=$(CHOOSE_NOTAGS=1 CHOOSE_W=150 choose "Summon - ${GPU_COUNT}x $GPU_NAME, $((FREE_MB/1024)) GB" \
-      "Which AI do you want to summon? Pre-selected: the best model that reaches 128K on this card.\nllama.cpp = tuned per model, verified downloads. Ollama = from ollama.com. One runs at a time." \
-      "$DEF_ENGINE" "${ITEMS[@]}") || { echo "Cancelled."; exit 0; }
+    PICKED=_h1
+    while [[ $PICKED == _* ]]; do   # a header or the gap: show the menu again
+      PICKED=$(CHOOSE_NOTAGS=1 CHOOSE_W=150 CHOOSE_TEXTLINES=1 choose "Summon v$SUMMON_VERSION - ${GPU_COUNT}x $GPU_NAME, $((FREE_MB/1024)) GB" \
+        "Which AI do you want to summon? Pre-selected: the best model reaching 128K here. Size = weights ~VRAM@context." \
+        "$DEF_ENGINE" "${ITEMS[@]}") || { echo "Cancelled."; exit 0; }
+    done
   fi
   if [[ $PICKED == ol:* ]]; then ENGINE=ollama OL_PICK=$(( ${PICKED#ol:} - 1 )); else ENGINE=$PICKED; fi
 fi
@@ -764,6 +799,7 @@ install_llamacpp() {
     exit 1
   fi
   IFS='|' read -r QUANT_SEL BYTES SHA CTX_SEL KV_SEL <<< "$PICK"
+  ask_port
   echo "Plan: $QUANT_SEL weights ($((BYTES/1073741824)) GB) + $KV_SEL K/V at $((CTX_SEL/1024))K context = ~$(( ($(nb_need_mb "$BYTES" "$CTX_SEL" "$(kv_bytes "$KV_SEL")") + LC_OVERHEAD_MB) / 1024 )) GB of $((FREE_MB/1024)) GB"
   if (( DRY_RUN )); then
     echo
@@ -943,6 +979,7 @@ install_ollama() {
       "Only $((FREE_MB/1024))GB VRAM. These will spill to CPU (slow):\n\n${TOO_BIG}\nPull them anyway? (No = skip them)"; then
     KEEP=(); for i in "${SEL[@]}"; do [ "${MCTX[i]}" = 0 ] || KEEP+=($i); done; SEL=("${KEEP[@]}")
   fi
+  ask_port
 
   if (( DRY_RUN )); then
     echo
@@ -1006,16 +1043,6 @@ install_ollama() {
 }
 
 # ======================================================================================================
-# Port, then run the chosen engine
+# Run the chosen engine (each asks for the port last, after its model choices)
 # ======================================================================================================
-if [ -z "$PORT" ]; then
-  if (( HAS_WHIPTAIL && INTERACTIVE )); then
-    PORT=$(whiptail --backtitle "$BACKTITLE" --title "Port" --inputbox "Port for the AI endpoint on this machine:" 9 50 20001 3>&1 1>&2 2>&3) || { echo "Cancelled."; exit 0; }
-  else
-    read -rp "Port for the AI endpoint on this machine [20001]: " PORT
-    PORT=${PORT:-20001}
-  fi
-  [[ "$PORT" =~ ^[0-9]+$ ]] && (( PORT >= 1 && PORT <= 65535 )) || { echo "Invalid port: '$PORT'"; exit 1; }
-fi
-
 if [ "$ENGINE" = ollama ]; then install_ollama; else install_llamacpp "$ENGINE"; fi
