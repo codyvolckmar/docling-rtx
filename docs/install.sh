@@ -29,7 +29,7 @@ if [ -r /dev/tty ] && { : < /dev/tty; } 2>/dev/null; then TTY=/dev/tty; fi
 
 # Root is needed for apt, Docker and the firewall rule; a dry run needs nothing. sudo drops the environment,
 # so pass Summon's settings (and SSH_CLIENT, which decides how the port is locked) explicitly.
-case " $* " in *" --dry-run "*|*" --help "*|*" -h "*) NEED_ROOT=0 ;; *) NEED_ROOT=1 ;; esac
+case " $* " in *" --dry-run "*|*" --help "*|*" -h "*|*" --version "*) NEED_ROOT=0 ;; *) NEED_ROOT=1 ;; esac
 if [ "$(id -u)" = 0 ] || [ "$NEED_ROOT" = 0 ]; then
   exec bash "$DIR/summon.sh" "$@" < "$TTY"
 fi

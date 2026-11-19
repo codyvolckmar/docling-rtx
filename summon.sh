@@ -201,7 +201,12 @@ OL_OVERHEAD_MB=1536                            # CUDA context + compute buffers
 # ======================================================================================================
 APT_UPDATED=0
 apt_get() {   # install packages; runs apt-get update once per run first (fresh pods have no package lists)
-  if (( ! APT_UPDATED )); then apt-get update -qq; APT_UPDATED=1; fi
+  if (( ! APT_UPDATED )); then
+    apt-get update -qq; APT_UPDATED=1
+    # Minimal images lack apt-utils, so every install prints "debconf: delaying package configuration, since
+    # apt-utils is not installed". Harmless, but noisy: install it first (~1 MB), quietly, best effort.
+    dpkg -s apt-utils >/dev/null 2>&1 || apt-get install -y -qq apt-utils >/dev/null 2>&1 || true
+  fi
   apt-get install -y -qq "$@" >/dev/null
 }
 
