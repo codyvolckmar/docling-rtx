@@ -10,8 +10,9 @@
 #   Ollama: a ranked menu of other open models (Qwen3.8 27B, Qwen3.6 35B-A3B, Gemma 4 ...), swapped on demand.
 # One engine runs at a time: starting one stops the other (they would fight over VRAM and the port).
 #
-#   ./summon.sh [PORT]                       menu: model, then its context / weights (or Ollama's model list)
-#   ./summon.sh nanbeige|qwen38pi|ornith35b|ornith9b|ollama [PORT]   skip the first menu (same as ENGINE=...)
+#   ./summon.sh [PORT]                       one menu with every model (llama.cpp + Ollama), then context/weights
+#   ./summon.sh nanbeige|qwen38pi|ornith35b|ornith9b [PORT]   skip the menu (same as ENGINE=...)
+#   ./summon.sh ollama [PORT]                the menu, with the recommended Ollama model pre-selected
 #   ./summon.sh --dry-run [PORT]             the whole wizard, then print the plan: installs and downloads nothing
 #                                            SUMMON_GPU="RTX 3090:24576" previews another card (dry runs only)
 #   ./summon.sh --lock [PORT]                re-lock the port to your current IP (new home IP / after a reboot)
@@ -26,7 +27,7 @@
 #   THINK_BUDGET=4096 TEMPERATURE=0.6 TOP_P=0.95 TOP_K=20   cap thinking / server sampling defaults
 #   SPEC=off                       disable n-gram speculative decoding (on by default)
 # Ollama options:
-#   ONLY=1,3                       skip the model menu, pull only these rows
+#   ONLY=1,3                       skip the menu, pull these Ollama models (1 = Qwen3.8 27B ... in list order)
 #   FAST=1                         try Q4 before Q8 (~1.7x decode speed, ~11 GB less VRAM)
 #   OLLAMA_KV_CACHE_TYPE=q8_0      halve K/V memory (global: affects every model)
 set -e
@@ -228,17 +229,22 @@ banner() {
 }
 
 choose() {   # $1 = title, $2 = text, $3 = default tag, then tag/label pairs -> prints the chosen tag
+  # CHOOSE_NOTAGS=1 hides the tag column (rows read as plain labels); CHOOSE_W caps the width (default 110).
   local title=$1 text=$2 def=$3 i=0 n=1 c tags=(); shift 3
   if command -v whiptail >/dev/null; then
-    local w=$(( $(tput cols 2>/dev/null || echo 110) - 4 )); (( w > 110 )) && w=110
-    whiptail --backtitle "$BACKTITLE" --title "$title" --default-item "$def" --menu "$text" $(( $# / 2 + 12 )) "$w" $(( $# / 2 )) \
-      "$@" 3>&1 1>&2 2>&3
+    local w=$(( $(tput cols 2>/dev/null || echo 110) - 4 )) h lh rows=$(( $# / 2 ))
+    (( w > ${CHOOSE_W:-110} )) && w=${CHOOSE_W:-110}
+    h=$(( rows + 12 )); (( h > $(tput lines 2>/dev/null || echo 40) - 2 )) && h=$(( $(tput lines 2>/dev/null || echo 40) - 2 ))
+    lh=$(( h - 12 )); (( lh < 3 )) && lh=3; (( lh > rows )) && lh=$rows
+    whiptail --backtitle "$BACKTITLE" --title "$title" ${CHOOSE_NOTAGS:+--notags} --default-item "$def" \
+      --menu "$text" "$h" "$w" "$lh" "$@" 3>&1 1>&2 2>&3
     return
   fi
   printf '\n%s\n%b\n' "$title" "$text" >&2
   while (( $# )); do
     i=$((i + 1)); tags+=("$1"); [ "$1" = "$def" ] && n=$i
-    if [[ $1 =~ ^[0-9]+$ ]]; then printf '%2d) %s\n' "$i" "$2" >&2; else printf '%2d) %-8s %s\n' "$i" "$1" "$2" >&2; fi
+    if [[ $1 =~ ^[0-9]+$ ]] || [ -n "${CHOOSE_NOTAGS:-}" ]; then printf '%2d) %s\n' "$i" "$2" >&2
+    else printf '%2d) %-8s %s\n' "$i" "$1" "$2" >&2; fi
     shift 2
   done
   read -rp "Choice [$n]: " c; c=${c:-$n}
@@ -446,6 +452,90 @@ mount_ok() {   # $1 = folder: can a container see a file in it?
   local r=$?; rm -f "$1/.mount-probe"; [ "$new" = 1 ] && [ "$r" != 0 ] && rmdir "$1" 2>/dev/null; return $r
 }
 
+# --- Ollama: sizes and fit for every model in OL_MODELS (registry lookups, no installs) ---
+model_mb() {   # download size of an Ollama registry ref (or a HF GGUF), in MB; empty on failure
+  if [ -n "${HF_MB[$1]:-}" ]; then echo "${HF_MB[$1]}"; return 0; fi
+  local name=${1%%:*} tag=latest
+  [[ $1 == *:* ]] && tag=${1##*:}
+  [[ $name == */* ]] || name="library/$name"
+  curl -fsSL -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+    "https://registry.ollama.ai/v2/$name/manifests/$tag" 2>/dev/null \
+    | grep -o '"size":[0-9]*' | awk -F: '{s+=$2} END{if (s) print int(s/1048576)}'
+}
+ol_need_mb() { echo $(( $2 + KV[$1] * $3 * KV_PCT / 100 / 1024 + FIXED[$1] + OL_OVERHEAD_MB )); }   # model i, weights MB, ctx
+confirm_yesno() {   # $1 = question (may contain \n); returns 0 for yes
+  local a
+  [ -n "${ONLY:-}" ] && return 0   # rows were named explicitly; don't re-ask
+  if (( HAS_WHIPTAIL )); then
+    whiptail --backtitle "$BACKTITLE" --title "Won't fit in VRAM" --yesno "$1" 16 78
+  else
+    printf '%b\n' "$1"; read -rp "[y/N] " a; [[ $a == [yY]* ]]
+  fi
+}
+
+ol_prepare() {   # sets KV_TYPE/KV_PCT/QUANT_ORDER, the per-model arrays (REF, Q, MCTX, GB, ...) and REC
+  # OLLAMA_KV_CACHE_TYPE is global: Ollama applies it to every model. q8_0 ~53% of the f16 bytes, q4_0 ~27%.
+  KV_TYPE=${OLLAMA_KV_CACHE_TYPE:-f16}
+  case "$KV_TYPE" in
+    f16)  KV_PCT=100 ;;
+    q8_0) KV_PCT=53 ;;
+    q4_0) KV_PCT=27 ;;
+    *) echo "Unsupported OLLAMA_KV_CACHE_TYPE '$KV_TYPE' (use f16, q8_0 or q4_0)"; exit 1 ;;
+  esac
+  export OLLAMA_KV_CACHE_TYPE="$KV_TYPE"
+  export OLLAMA_FLASH_ATTENTION=1          # required for a quantized K/V cache
+  export OLLAMA_NUM_PARALLEL=1             # each parallel slot needs its own full KV cache; subagents queue
+  export OLLAMA_MAX_LOADED_MODELS=1        # sizes assume one model in VRAM at a time
+  # Ollama unloads an idle model after 5 min, then the next request waits ~20-60 s to reload it. Keep it loaded.
+  export OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:--1}
+  QUANT_ORDER="Q8-first"; [ "${FAST:-0}" = 1 ] && QUANT_ORDER="Q4-first (FAST=1)"
+
+  # --- Sizes: look every ref up in parallel (~0.5 s per registry call), then pick per model what fits ---
+  echo "Checking Ollama model sizes..."
+  SIZE_DIR=$(mktemp -d); trap 'rm -rf "$SIZE_DIR"' EXIT
+  local e r r8 r4 rk kv fx cp n note i s8 s4 q c s opt
+  for e in "${OL_MODELS[@]}"; do
+    IFS='|' read -r _ r8 r4 _ <<< "$e"
+    for r in $r8 $r4; do model_mb "$r" > "$SIZE_DIR/$(echo "$r" | tr '/:' '__')" & done
+  done
+  wait
+  cached_mb() { cat "$SIZE_DIR/$(echo "$1" | tr '/:' '__')" 2>/dev/null; }
+
+  # Per model: the best option that fits -> REF (tag to pull), Q, MCTX (0 = too big), GB
+  RANKS=() CAPS=() MNAME=() NOTE=() KV=() FIXED=() REF=() Q=() MCTX=() GB=()
+  for e in "${OL_MODELS[@]}"; do
+    IFS='|' read -r rk r8 r4 kv fx cp n note <<< "$e"
+    i=${#RANKS[@]}
+    RANKS+=("$rk") CAPS+=("$cp") MNAME+=("$n") NOTE+=("$note") KV+=("$kv") FIXED+=("$fx")
+    s8=$(cached_mb "$r8"); s4=""; [ -n "$r4" ] && s4=$(cached_mb "$r4")
+    REF+=("") Q+=("") MCTX+=(0) GB+=("?")
+    # Q8-first reads ~29 GB of weights per decoded token on a 48 GB card; FAST=1 tries Q4 (~17 GB) first.
+    if [ "${FAST:-0}" = 1 ]; then OPTS=("4 $OL_CTX_MAX" "4 $OL_CTX_MIN" "8 $OL_CTX_MAX" "8 $OL_CTX_MIN")
+    else OPTS=("8 $OL_CTX_MAX" "8 $OL_CTX_MIN" "4 $OL_CTX_MAX" "4 $OL_CTX_MIN"); fi
+    for opt in "${OPTS[@]}"; do
+      read -r q c <<< "$opt"
+      if [ "$q" = 8 ]; then r=$r8 s=$s8; else r=$r4 s=$s4; fi
+      [ -n "$s" ] || continue
+      if (( $(ol_need_mb $i $s $c) <= FREE_MB )); then REF[i]=$r Q[i]=$q MCTX[i]=$c GB[i]=$(( $(ol_need_mb $i $s $c) / 1024 )); break; fi
+    done
+    if [ -z "${REF[i]}" ]; then   # too big for any option: smallest @64K, flagged
+      if [ -n "$s4" ]; then REF[i]=$r4 Q[i]=4 s=$s4; else REF[i]=$r8 Q[i]=8 s=${s8:-0}; fi
+      GB[i]=$(( $(ol_need_mb $i $s $OL_CTX_MIN) / 1024 ))
+    fi
+    [ -z "$r4" ] && Q[i]=""   # own models: single tag, quant not shown
+  done
+
+  REC=-1
+  for i in "${!RANKS[@]}"; do [[ ${RANKS[i]} != - && ${MCTX[i]} != 0 ]] && { REC=$i; break; }; done
+  if (( REC >= 0 )); then REC_TXT="Recommended: ${MNAME[REC]} at ${Q[REC]:+Q${Q[REC]} }$((MCTX[REC]/1024))K context, $KV_TYPE KV"
+  else REC_TXT="None of the curated models fit in VRAM."; fi
+  fit_label() {
+    local j=$1 qq=${Q[$1]:+Q${Q[$1]} }
+    if (( MCTX[j] == 0 )); then echo "TOO BIG ~${GB[j]}G@64K"; else echo "${qq}~${GB[j]}G@$((MCTX[j]/1024))K"; fi
+  }
+  return 0
+}
+
 # ======================================================================================================
 # Install: GPU, engine, port
 # ======================================================================================================
@@ -479,44 +569,59 @@ if (( INTERACTIVE && ! DRY_RUN )) && ! command -v whiptail >/dev/null; then
 fi
 HAS_WHIPTAIL=0; command -v whiptail >/dev/null && HAS_WHIPTAIL=1
 
-# --- Model / engine (ENGINE=..., or the name as an argument: ./summon.sh ornith9b 40000) ---
+# --- One menu with every model: llama.cpp (tuned per model) and Ollama, side by side ---
+# ENGINE=... or a model id as the first argument skips it (./summon.sh ornith9b 40000). "ollama" picks the
+# recommended Ollama model (or ONLY=1,3 for several). Default: the first llama.cpp model that reaches 128K on this
+# card (Nanbeige on 48 GB, Ornith 9B on 24 GB), else the best-ranked Ollama model that fits.
 [ -n "$TARGET" ] && [ -z "${ENGINE:-}" ] && ENGINE=$TARGET
 case "${ENGINE:-}" in llamacpp|llama.cpp) ENGINE=nanbeige ;; esac
+if [ -z "${ENGINE:-}" ] && { [ -n "${ONLY:-}" ] || [ -n "${FAST:-}" ]; }; then ENGINE=ollama; fi
 case "${ENGINE:-}" in
-  nanbeige|qwen38pi|ornith35b|ornith9b|ollama) ;;
-  "")
-    if [ -n "${ONLY:-}" ] || [ -n "${FAST:-}" ]; then ENGINE=ollama
-    else
-      # Default: the first llama.cpp model that reaches 128K on this card (Nanbeige on 48 GB, Ornith 9B on 24 GB).
-      # The menu lists every model with what fits on this card.
-      DEF_ENGINE="" ITEMS=()
-      for id in "${LC_MODEL_IDS[@]}"; do
-        lc_model "$id"; lc_budget
-        q=$(best_quant 131072); best=""
-        for c in "${LC_CTX_TIERS[@]}"; do [ -n "$(best_quant "$c")" ] && { best=$c; break; }; done
-        [ -z "$DEF_ENGINE" ] && [ -n "$q" ] && DEF_ENGINE=$id
-        if [ -n "$q" ]; then fit="128K with $q"
-        elif [ -n "$best" ]; then fit="max $((best/1024))K here"
-        else fit="does NOT fit this card"; fi
-        case "$id" in
-          nanbeige) blurb="best agentic coding (AA index 20)" ;;
-          qwen38pi) blurb="tuned for pi, no thinking (vendor-tested)" ;;
-          ornith35b) blurb="fast MoE, 3B active (vendor-tested)" ;;
-          ornith9b) blurb="fast 9B for 24 GB cards (vendor-tested)" ;;
-        esac
-        ITEMS+=("$id" "$(printf '%-16s llama.cpp  %-22s %s' "$LC_TITLE" "$fit" "$blurb")")
-      done
-      ITEMS+=(ollama "$(printf '%-16s Ollama     %-22s %s' "Ollama models" "choose next" "Qwen3.8 27B, Qwen3.6, Gemma 4 ...")")
-      DEF_ENGINE=${DEF_ENGINE:-ollama}
-      if [ -n "${CTX:-}" ] || [ -n "${QUANT:-}" ] || (( ! INTERACTIVE )); then ENGINE=$DEF_ENGINE
-      else
-        ENGINE=$(choose "Summon - ${GPU_COUNT}x $GPU_NAME, $((FREE_MB/1024)) GB" \
-          "Which AI do you want to summon? Pre-selected: the best model that reaches 128K on this card.\nOne engine runs at a time: starting one stops the other." "$DEF_ENGINE" "${ITEMS[@]}") \
-          || { echo "Cancelled."; exit 0; }
-      fi
-    fi ;;
+  nanbeige|qwen38pi|ornith35b|ornith9b|ollama|"") ;;
   *) echo "ENGINE must be one of: ${LC_MODEL_IDS[*]} ollama (got '$ENGINE')"; exit 1 ;;
 esac
+OL_PICK=""
+if [ -z "${ENGINE:-}" ] || [ "$ENGINE" = ollama ]; then ol_prepare; fi
+if [ -z "${ENGINE:-}" ] || { [ "$ENGINE" = ollama ] && [ -z "${ONLY:-}" ]; }; then
+  DEF_ENGINE="" ITEMS=()
+  NOTE_W=$(( $(tput cols 2>/dev/null || echo 124) - 4 )); (( NOTE_W > 150 )) && NOTE_W=150
+  NOTE_W=$(( NOTE_W - 70 )); (( NOTE_W < 16 )) && NOTE_W=16   # name + engine + fit + padding take ~70 columns
+  for id in "${LC_MODEL_IDS[@]}"; do
+    lc_model "$id"; lc_budget
+    # Fit label like Ollama's: weights ~total VRAM @ context (128K, or the longest context that fits)
+    q=$(best_quant 131072); c=131072
+    if [ -z "$q" ]; then for c in "${LC_CTX_TIERS[@]}"; do q=$(best_quant "$c"); [ -n "$q" ] && break; done; fi
+    [ -z "$DEF_ENGINE" ] && [ "$c" = 131072 ] && [ -n "$q" ] && DEF_ENGINE=$id
+    if [ -n "$q" ]; then
+      for e in "${LC_QUANTS[@]}"; do [ "${e%%|*}" = "$q" ] && b=$(echo "$e" | cut -d'|' -f2); done
+      kv=$(fit_kv "$b" "$c")
+      fit="$q ~$(( ($(nb_need_mb "$b" "$c" "$(kv_bytes "$kv")") + LC_OVERHEAD_MB) / 1024 ))G@$((c/1024))K"
+    else
+      lc_smallest=${LC_QUANTS[${#LC_QUANTS[@]}-1]}
+      fit="TOO BIG ~$(( ($(nb_need_mb "$(echo "$lc_smallest" | cut -d'|' -f2)" 32768 "$LC_KV_Q8") + LC_OVERHEAD_MB) / 1024 ))G@32K"
+    fi
+    case "$id" in
+      nanbeige) blurb="Best agentic coding (AA index 20). Text only" ;;
+      qwen38pi) blurb="Qwen3.8 + LoRA tuned for the pi agent, no thinking. Vendor-tested" ;;
+      ornith35b) blurb="Fast MoE, 3B active. Vendor-tested" ;;
+      ornith9b) blurb="Fast 9B, 256K on 24 GB cards. Vendor-tested" ;;
+    esac
+    ITEMS+=("$id" "$(printf '%-28.28s %-9s %-16s %.*s' "$LC_TITLE" llama.cpp "$fit" "$NOTE_W" "$blurb")")
+  done
+  for i in "${!RANKS[@]}"; do
+    ITEMS+=("ol:$((i+1))" "$(printf '%-28.28s %-9s %-16s %.*s' "${MNAME[i]}" Ollama "$(fit_label $i)" "$NOTE_W" "${NOTE[i]}")")
+  done
+  (( REC >= 0 )) && [ -z "$DEF_ENGINE" ] && DEF_ENGINE="ol:$((REC+1))"
+  [ "$ENGINE" = ollama ] && DEF_ENGINE="ol:$((REC >= 0 ? REC+1 : 1))"
+  DEF_ENGINE=${DEF_ENGINE:-nanbeige}
+  if [ -n "${CTX:-}" ] || [ -n "${QUANT:-}" ] || (( ! INTERACTIVE )); then PICKED=$DEF_ENGINE
+  else
+    PICKED=$(CHOOSE_NOTAGS=1 CHOOSE_W=150 choose "Summon - ${GPU_COUNT}x $GPU_NAME, $((FREE_MB/1024)) GB" \
+      "Which AI do you want to summon? Pre-selected: the best model that reaches 128K on this card.\nllama.cpp = tuned per model, verified downloads. Ollama = from ollama.com. One runs at a time." \
+      "$DEF_ENGINE" "${ITEMS[@]}") || { echo "Cancelled."; exit 0; }
+  fi
+  if [[ $PICKED == ol:* ]]; then ENGINE=ollama OL_PICK=$(( ${PICKED#ol:} - 1 )); else ENGINE=$PICKED; fi
+fi
 
 # ======================================================================================================
 # Engine: llama.cpp (the model chosen above)
@@ -801,44 +906,7 @@ install_llamacpp() {
 # ======================================================================================================
 # Engine: Ollama
 # ======================================================================================================
-model_mb() {   # download size of an Ollama registry ref (or a HF GGUF), in MB; empty on failure
-  if [ -n "${HF_MB[$1]:-}" ]; then echo "${HF_MB[$1]}"; return 0; fi
-  local name=${1%%:*} tag=latest
-  [[ $1 == *:* ]] && tag=${1##*:}
-  [[ $name == */* ]] || name="library/$name"
-  curl -fsSL -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
-    "https://registry.ollama.ai/v2/$name/manifests/$tag" 2>/dev/null \
-    | grep -o '"size":[0-9]*' | awk -F: '{s+=$2} END{if (s) print int(s/1048576)}'
-}
-ol_need_mb() { echo $(( $2 + KV[$1] * $3 * KV_PCT / 100 / 1024 + FIXED[$1] + OL_OVERHEAD_MB )); }   # model i, weights MB, ctx
-confirm_yesno() {   # $1 = question (may contain \n); returns 0 for yes
-  local a
-  [ -n "${ONLY:-}" ] && return 0   # rows were named explicitly; don't re-ask
-  if (( HAS_WHIPTAIL )); then
-    whiptail --backtitle "$BACKTITLE" --title "Won't fit in VRAM" --yesno "$1" 16 78
-  else
-    printf '%b\n' "$1"; read -rp "[y/N] " a; [[ $a == [yY]* ]]
-  fi
-}
-
 install_ollama() {
-  # OLLAMA_KV_CACHE_TYPE is global: Ollama applies it to every model. q8_0 ~53% of the f16 bytes, q4_0 ~27%.
-  KV_TYPE=${OLLAMA_KV_CACHE_TYPE:-f16}
-  case "$KV_TYPE" in
-    f16)  KV_PCT=100 ;;
-    q8_0) KV_PCT=53 ;;
-    q4_0) KV_PCT=27 ;;
-    *) echo "Unsupported OLLAMA_KV_CACHE_TYPE '$KV_TYPE' (use f16, q8_0 or q4_0)"; exit 1 ;;
-  esac
-  export OLLAMA_KV_CACHE_TYPE="$KV_TYPE"
-  export OLLAMA_FLASH_ATTENTION=1          # required for a quantized K/V cache
-  export OLLAMA_NUM_PARALLEL=1             # each parallel slot needs its own full KV cache; subagents queue
-  export OLLAMA_MAX_LOADED_MODELS=1        # sizes assume one model in VRAM at a time
-  # Ollama unloads an idle model after 5 min, then the next request waits ~20-60 s to reload it. Keep it loaded.
-  export OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:--1}
-  local QUANT_ORDER="Q8-first"; [ "${FAST:-0}" = 1 ] && QUANT_ORDER="Q4-first (FAST=1)"
-  echo "Ollama mode: $QUANT_ORDER, $KV_TYPE KV cache"
-
   # --- Prerequisites (not in a dry run) ---
   local APT_PKGS=()
   if (( ! DRY_RUN )); then
@@ -852,98 +920,21 @@ install_ollama() {
     command -v ollama >/dev/null || curl -fsSL https://ollama.com/install.sh | sh
   fi
 
-  # --- Sizes: look every ref up in parallel (~0.5 s per registry call), then pick per model what fits ---
-  echo "Checking model sizes..."
-  SIZE_DIR=$(mktemp -d); trap 'rm -rf "$SIZE_DIR"' EXIT
-  local e r r8 r4 rk kv fx cp n note i s8 s4 q c r s opt
-  for e in "${OL_MODELS[@]}"; do
-    IFS='|' read -r _ r8 r4 _ <<< "$e"
-    for r in $r8 $r4; do model_mb "$r" > "$SIZE_DIR/$(echo "$r" | tr '/:' '__')" & done
-  done
-  wait
-  cached_mb() { cat "$SIZE_DIR/$(echo "$1" | tr '/:' '__')" 2>/dev/null; }
-
-  # Per model: the best option that fits -> REF (tag to pull), Q, MCTX (0 = too big), GB
-  RANKS=() CAPS=() MNAME=() NOTE=() KV=() FIXED=() REF=() Q=() MCTX=() GB=()
-  for e in "${OL_MODELS[@]}"; do
-    IFS='|' read -r rk r8 r4 kv fx cp n note <<< "$e"
-    i=${#RANKS[@]}
-    RANKS+=("$rk") CAPS+=("$cp") MNAME+=("$n") NOTE+=("$note") KV+=("$kv") FIXED+=("$fx")
-    s8=$(cached_mb "$r8"); s4=""; [ -n "$r4" ] && s4=$(cached_mb "$r4")
-    REF+=("") Q+=("") MCTX+=(0) GB+=("?")
-    # Q8-first reads ~29 GB of weights per decoded token on a 48 GB card; FAST=1 tries Q4 (~17 GB) first.
-    if [ "${FAST:-0}" = 1 ]; then OPTS=("4 $OL_CTX_MAX" "4 $OL_CTX_MIN" "8 $OL_CTX_MAX" "8 $OL_CTX_MIN")
-    else OPTS=("8 $OL_CTX_MAX" "8 $OL_CTX_MIN" "4 $OL_CTX_MAX" "4 $OL_CTX_MIN"); fi
-    for opt in "${OPTS[@]}"; do
-      read -r q c <<< "$opt"
-      if [ "$q" = 8 ]; then r=$r8 s=$s8; else r=$r4 s=$s4; fi
-      [ -n "$s" ] || continue
-      if (( $(ol_need_mb $i $s $c) <= FREE_MB )); then REF[i]=$r Q[i]=$q MCTX[i]=$c GB[i]=$(( $(ol_need_mb $i $s $c) / 1024 )); break; fi
-    done
-    if [ -z "${REF[i]}" ]; then   # too big for any option: smallest @64K, flagged
-      if [ -n "$s4" ]; then REF[i]=$r4 Q[i]=4 s=$s4; else REF[i]=$r8 Q[i]=8 s=${s8:-0}; fi
-      GB[i]=$(( $(ol_need_mb $i $s $OL_CTX_MIN) / 1024 ))
-    fi
-    [ -z "$r4" ] && Q[i]=""   # own models: single tag, quant not shown
-  done
-
-  local REC=-1 REC_TXT
-  for i in "${!RANKS[@]}"; do [[ ${RANKS[i]} != - && ${MCTX[i]} != 0 ]] && { REC=$i; break; }; done
-  if (( REC >= 0 )); then REC_TXT="Recommended: ${MNAME[REC]} at ${Q[REC]:+Q${Q[REC]} }$((MCTX[REC]/1024))K context, $KV_TYPE KV"
-  else REC_TXT="None of the curated models fit in VRAM."; fi
-  echo "$REC_TXT"
-  fit_label() {
-    local j=$1 qq=${Q[$1]:+Q${Q[$1]} }
-    if (( MCTX[j] == 0 )); then echo "TOO BIG ~${GB[j]}G@64K"; else echo "${qq}~${GB[j]}G@$((MCTX[j]/1024))K"; fi
-  }
-  # Checklist: tags are row numbers; only the recommended model starts ticked.
-  local CHECKLIST=() st mark N H W ROWS COLS PICKS ONLY_PICKS="" t nums DEF j NOTE_W
-  ROWS=$(tput lines 2>/dev/null || echo 40) COLS=$(tput cols 2>/dev/null || echo 120)
-  W=$(( COLS - 4 )); (( W > 180 )) && W=180
-  NOTE_W=$(( W - 76 )); (( NOTE_W < 20 )) && NOTE_W=20   # checkbox + row + rank + caps + name + size take ~70
-  for i in "${!RANKS[@]}"; do
-    st=OFF mark=""
-    # Only the recommended model is pre-ticked: community / HF rows are opt-in (no surprise 20-30 GB downloads)
-    (( i == REC )) && st=ON mark=" <<REC"
-    rk="#${RANKS[i]}"; [ "${RANKS[i]}" = - ] && rk="Comm"; [[ ${REF[i]} == hf.co/* ]] && rk="HF"
-    CHECKLIST+=("$((i+1))" "$(printf '%-4s %s %-29.29s %-17s %.*s%s' "$rk" "${CAPS[i]}" "${MNAME[i]}" "$(fit_label $i)" "$NOTE_W" "${NOTE[i]}" "$mark")" "$st")
-  done
-  N=${#RANKS[@]}
-  H=$(( N + 11 )); (( H > ROWS - 2 )) && H=$(( ROWS - 2 ))
-  # ONLY=... bypasses the menu (the recommended + "your own" rows are ON by default otherwise)
+  # What to pull: the model picked in the menu, or the rows in ONLY=1,3 (several at once, no menu)
+  local N=${#RANKS[@]} t ONLY_PICKS=""
+  SEL=()
   if [ -n "${ONLY:-}" ]; then
     for t in ${ONLY//,/ }; do
-      if [[ "$t" =~ ^[0-9]+$ ]] && (( t >= 1 && t <= N )); then ONLY_PICKS+=" $t"; else echo "Ignoring invalid row in ONLY: '$t'"; fi
+      if [[ "$t" =~ ^[0-9]+$ ]] && (( t >= 1 && t <= N )); then SEL+=($((t-1))); ONLY_PICKS+=" $t"
+      else echo "Ignoring invalid row in ONLY: '$t' (rows 1..$N: $0 --help)"; fi
     done
-    [ -n "$ONLY_PICKS" ] || { echo "ONLY=${ONLY} has no valid row numbers (1..$N); refusing to fall back to the default downloads."; exit 1; }
-    echo "ONLY=${ONLY}: skipping the model menu; pulling row(s) ${ONLY} only."
-    PICKS=$ONLY_PICKS
-  elif (( HAS_WHIPTAIL && INTERACTIVE )); then
-    PICKS=$(whiptail --backtitle "$BACKTITLE" --title "Ollama models - ${GPU_COUNT}x $GPU_NAME, $((FREE_MB/1024))GB VRAM" \
-      --checklist "$REC_TXT\nRanked for long-context coherence (AA LCR + hallucination). Caps: T=tools V=vision R=reasoning\nSize = weights + $KV_TYPE KV cache at the shown context. Space to select, Enter to confirm.\nOnly the recommended model is ticked: add others with Space, or skip the menu with ONLY=1,3" \
-      $H $W $(( H - 11 )) "${CHECKLIST[@]}" 3>&1 1>&2 2>&3) || PICKS=""
-  else
-    DEF=""
-    for ((j=0; j<${#CHECKLIST[@]}; j+=3)); do [ "${CHECKLIST[j+2]}" = ON ] && DEF+="${DEF:+,}${CHECKLIST[j]}"; done
-    if (( INTERACTIVE )); then
-      echo; echo "Ollama models - ${GPU_COUNT}x $GPU_NAME, $((FREE_MB/1024))GB VRAM"
-      echo "$REC_TXT"
-      echo "Caps: T=tools V=vision R=reasoning. Size = weights + $KV_TYPE KV cache at the shown context."
-      for i in "${!RANKS[@]}"; do
-        rk="#${RANKS[i]}"; [ "${RANKS[i]}" = - ] && rk="Comm"; [[ ${REF[i]} == hf.co/* ]] && rk="HF"
-        printf '%2d) %-4s %s %-29.29s %-17s %s\n' "$((i+1))" "$rk" "${CAPS[i]}" "${MNAME[i]}" "$(fit_label $i)" "${NOTE[i]}"
-      done
-      read -rp "Model numbers to pull, comma-separated [${DEF:-none}]: " nums
-    fi
-    PICKS=""
-    for t in $(echo "${nums:-$DEF}" | tr ',' ' '); do
-      if [[ "$t" =~ ^[0-9]+$ ]] && (( t >= 1 && t <= N )); then PICKS+=" $t"; else echo "Ignoring invalid model number: '$t'"; fi
-    done
+    (( ${#SEL[@]} )) || { echo "ONLY=${ONLY} has no valid Ollama rows (1..$N)."; exit 1; }
+  elif [ -n "$OL_PICK" ]; then
+    SEL=("$OL_PICK")
+  elif (( REC >= 0 )); then
+    SEL=("$REC")
   fi
-  SEL=()
-  for t in $(echo "$PICKS" | tr -d '"'); do
-    if [[ "$t" =~ ^[0-9]+$ ]] && (( t >= 1 && t <= N )); then SEL+=($((t-1))); fi
-  done
+  echo "Ollama: $QUANT_ORDER, $KV_TYPE KV cache. Pulling: $(for i in "${SEL[@]}"; do printf '%s ' "${MNAME[i]}"; done)"
 
   # Warn if anything selected won't fit even at Q4 @64K
   local TOO_BIG="" KEEP

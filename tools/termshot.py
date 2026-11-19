@@ -268,6 +268,8 @@ class Screen:
 
 
 def run(cmd, env, steps, outdir):
+    import codecs
+    dec = codecs.getincrementaldecoder('utf-8')('replace')   # multi-byte characters can be split across reads
     pid, fd = pty.fork()
     if pid == 0:
         os.execvpe('bash', ['bash', '-c', cmd], env)
@@ -282,10 +284,11 @@ def run(cmd, env, steps, outdir):
             rl, _, _ = select.select([fd], [], [], 0.05)
             if fd in rl:
                 try:
-                    data = os.read(fd, 65536).decode('utf-8', 'replace')
+                    raw = os.read(fd, 65536)
+                    data = dec.decode(raw)
                 except OSError:
                     return False
-                if not data:
+                if not raw:
                     return False
                 text += data
                 scr.feed(data)
@@ -354,6 +357,6 @@ if __name__ == '__main__':
     # 3) Ollama model checklist
     env = dict(base, SUMMON_GPU='NVIDIA RTX A6000:49140')
     run(f'cd {root}; clear; "{S}" --dry-run ollama 40000; sleep 30', env, [
-        ('until', r'Ollama models', 25), ('shot', '09-ollama-menu.png', 'summon.sh --dry-run ollama 40000  (RTX A6000, 48 GB)'),
+        ('until', r'Which AI', 25), ('shot', '09-ollama-menu.png', 'summon.sh --dry-run ollama 40000  (RTX A6000, 48 GB)'),
         ('key', ENTER), ('until', r'Endpoint:', 15), ('shot', '10-ollama-plan.png', 'summon.sh --dry-run ollama 40000  (RTX A6000, 48 GB)'),
     ], out)

@@ -42,8 +42,9 @@ Piping a script into a shell gives it root. Read [summon.sh](summon.sh) first; i
 ## Usage
 
 ```bash
-./summon.sh [PORT]                          # the wizard
-./summon.sh nanbeige|qwen38pi|ornith35b|ornith9b|ollama [PORT]   # skip the first menu
+./summon.sh [PORT]                          # the wizard: one menu with every model, sized to your card
+./summon.sh nanbeige|qwen38pi|ornith35b|ornith9b [PORT]   # skip the menu
+ONLY=1,3 ./summon.sh [PORT]                 # pull several Ollama models at once (rows in list order)
 ./summon.sh --dry-run [PORT]                # plan only, installs nothing
 ./summon.sh --lock [PORT]                   # re-lock a rented pod's port to your current IP
 ./summon.sh --uninstall [llamacpp|ollama]   # remove an engine and its model files
@@ -67,7 +68,7 @@ Then point any OpenAI-compatible client at `http://localhost:PORT/v1` (rented po
 |---|---|
 | ![24 GB card](docs/img/06-model-menu-3090.png) | ![Context menu](docs/img/03-context-menu.png) |
 | ![Weights menu](docs/img/04-weights-menu.png) | ![Dry run plan](docs/img/05-dry-run-plan.png) |
-| ![Ollama models](docs/img/09-ollama-menu.png) | ![Ollama plan](docs/img/10-ollama-plan.png) |
+| ![Ollama pick](docs/img/09-ollama-menu.png) | ![Ollama plan](docs/img/10-ollama-plan.png) |
 
 Regenerate them with `python3 tools/termshot.py` (drives the real script in a pseudo-terminal).
 

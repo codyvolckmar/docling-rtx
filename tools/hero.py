@@ -10,11 +10,11 @@ W, H = 1600, 900
 B = '/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf'
 R = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
 RB = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
-PANELS = [
-    ('01-model-menu-a6000.png', (70, 222, 1205, 412), 'llama.cpp', ['Nanbeige 4.3 33B', 'Qwen3.8 27B pi', 'Ornith 1.5 35B / 9B'],
-     'Pre-selected for your card:\n128K context, Q6_K weights'),
-    ('09-ollama-menu.png', (40, 180, 1240, 522), 'Ollama', ['Qwen3.8 27B', 'Qwen3.6, Gemma 4', '+ more'],
-     'Ranked with independent\nbenchmarks, sized to your VRAM'),
+PANELS = [   # one merged menu, two cards: the same models, re-sized to the VRAM each card has
+    ('01-model-menu-a6000.png', (40, 140, 1240, 520), '48 GB card', ['Nanbeige 4.3 33B', '128K · Q6_K'],
+     'Pre-selected. 14 models,\nllama.cpp + Ollama, one list'),
+    ('06-model-menu-3090.png', (40, 140, 1240, 520), '24 GB card', ['Ornith 1.5 9B', '128K · Q8_0'],
+     'Same list, re-sized: knows\nwhat fits and what won\'t'),
 ]
 
 img = Image.new('RGB', (W, H), (14, 10, 22))
@@ -35,7 +35,7 @@ img.paste(grad, (0, 0), mask)
 d.text((330, 54), 'AI · OPEN-SOURCE · PRIVATE · INTELLIGENCE', font=tag, fill=(111, 214, 234))
 d.text((330, 82), 'One command turns your NVIDIA GPU into a private, OpenAI-compatible AI.', font=cap, fill=(214, 206, 228))
 
-PW, y = 1060, 160
+PW, y = 960, 150
 for name, box, eng, models, note in PANELS:
     im = Image.open(os.path.join(IMG, name)).convert('RGB').crop(box)
     ph = int(im.height * PW / im.width)
@@ -53,7 +53,7 @@ for name, box, eng, models, note in PANELS:
     for m in models:
         d.text((cx, cy), m, font=h1, fill=(226, 155, 255)); cy += 38
     d.multiline_text((cx, cy + 8), note, font=cap, fill=(169, 159, 189), spacing=6)
-    y += max(ph, cy + 70 - y) + 40
+    y += max(ph, cy + 70 - y) + 34
 d.rounded_rectangle([40, H - 74, 620, H - 28], 12, fill=(30, 20, 46), outline=(110, 70, 160), width=2)
 d.text((330, H - 51), 'codyvolckmar.github.io/summon', font=url, fill=(123, 227, 166), anchor='mm')
 d.text((W - 40, H - 51), 'Linux · Windows (WSL 2) · MIT', font=cap, fill=(169, 159, 189), anchor='rm')

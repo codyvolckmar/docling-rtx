@@ -99,7 +99,7 @@
     <tr><td><b>Ornith 1.5 9B</b></td><td>llama.cpp</td><td>Fast and light. Vendor benchmarks only.</td><td>256K with 8-bit weights</td><td>256K with 8-bit weights</td></tr>
     <tr><td><b>Ollama models</b></td><td>Ollama</td><td>Qwen3.8 27B, Qwen3.6 35B-A3B, Gemma 4 31B, K2 Horizon, Muse Glimmer…</td><td>Qwen3.8 27B at 64K</td><td>most at 128K, 8-bit</td></tr>
   </table>
-  <p class="note">Every model serves an OpenAI-compatible API: point any client (pi, Continue, Open WebUI, your own code) at
+  <p class="note">All of them are in one menu, sized live to your card. Every model serves an OpenAI-compatible API: point any client (pi, Continue, Open WebUI, your own code) at
     <code>http://localhost:PORT/v1</code>. One engine runs at a time; starting one stops the other.</p>
 </section>
 
@@ -107,12 +107,12 @@
   <h2><span>04</span> See it first</h2>
   <p class="note">Real screens from <code>./summon.sh --dry-run</code>: the actual script and whiptail menus, nothing installed.</p>
   <div class="shots">
-    <figure><a href="img/01-model-menu-a6000.png"><img src="img/01-model-menu-a6000.png" alt="Summon model menu on an RTX A6000" loading="lazy"></a><figcaption>48 GB card: Nanbeige pre-selected at 128K with Q6_K weights.</figcaption></figure>
-    <figure><a href="img/06-model-menu-3090.png"><img src="img/06-model-menu-3090.png" alt="Summon model menu on an RTX 3090" loading="lazy"></a><figcaption>24 GB card: Summon knows what won't fit and picks Ornith 9B.</figcaption></figure>
+    <figure><a href="img/01-model-menu-a6000.png"><img src="img/01-model-menu-a6000.png" alt="Summon model menu on an RTX A6000" loading="lazy"></a><figcaption>One menu, every model: llama.cpp and Ollama side by side, sized to a 48 GB card. Nanbeige pre-selected.</figcaption></figure>
+    <figure><a href="img/06-model-menu-3090.png"><img src="img/06-model-menu-3090.png" alt="Summon model menu on an RTX 3090" loading="lazy"></a><figcaption>The same list on a 24 GB card: re-sized, too-big models flagged, Ornith 9B pre-selected.</figcaption></figure>
     <figure><a href="img/03-context-menu.png"><img src="img/03-context-menu.png" alt="Context window menu" loading="lazy"></a><figcaption>Step 1: context window, with the best weights that fit at each length.</figcaption></figure>
     <figure><a href="img/04-weights-menu.png"><img src="img/04-weights-menu.png" alt="Weights menu" loading="lazy"></a><figcaption>Step 2: weights. Total VRAM and relative speed for every option.</figcaption></figure>
     <figure><a href="img/05-dry-run-plan.png"><img src="img/05-dry-run-plan.png" alt="Dry run plan" loading="lazy"></a><figcaption>The plan: exactly what it would install, download and start.</figcaption></figure>
-    <figure><a href="img/09-ollama-menu.png"><img src="img/09-ollama-menu.png" alt="Ollama model checklist" loading="lazy"></a><figcaption>Or pick Ollama models: Qwen3.8 27B recommended, ranked with independent benchmark data.</figcaption></figure>
+    <figure><a href="img/09-ollama-menu.png"><img src="img/09-ollama-menu.png" alt="Ollama model checklist" loading="lazy"></a><figcaption><code>./summon.sh ollama</code>: the same menu, Qwen3.8 27B pre-selected (ranked with independent benchmarks).</figcaption></figure>
     <figure><a href="img/10-ollama-plan.png"><img src="img/10-ollama-plan.png" alt="Ollama dry run plan pulling Qwen3.8 27B" loading="lazy"></a><figcaption>Ollama plan: Qwen3.8 27B at 128K with 8-bit weights, served locally.</figcaption></figure>
     <figure><a href="img/08-dry-run-plan-3090.png"><img src="img/08-dry-run-plan-3090.png" alt="Dry run plan on an RTX 3090" loading="lazy"></a><figcaption>RTX 3090 plan: Ornith 9B, 8-bit weights, 128K context in ~16 GB.</figcaption></figure>
   </div>
