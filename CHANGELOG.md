@@ -2,7 +2,7 @@
 
 ## v1.2.0 (2026-11-20)
 
-- Docs site restyled: enterprise slate/blue theme (replaces the purple).
+- Docs site, terminal UI (banner + whiptail theme) and all screenshots restyled: enterprise slate/blue theme (replaces purple).
 - **Logic-precision fixes (full-script audit).**
   - `--lock` works with no server running (Ollama's screen session dies on a reboot): `./summon.sh --lock PORT` defaults to host mode; a llama.cpp container on that port still locks via DOCKER-USER. `--dry-run --lock` now previews instead of locking.
   - `ENGINE=ollama` on a card where no Ollama model fits now errors out instead of silently running a llama.cpp model; Ollama also never starts with zero models.

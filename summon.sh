@@ -485,12 +485,12 @@ apt_get() {   # install packages; runs apt-get update once per run first (fresh 
 
 # --- Branding: banner + whiptail theme (your own NEWT_COLORS wins) ---
 BACKTITLE="SUMMON v$SUMMON_VERSION  -  AI . Open-source . Private . Intelligence"
-export NEWT_COLORS=${NEWT_COLORS:-'root=brightmagenta,black roottext=brightmagenta,black window=white,black border=magenta,black title=brightmagenta,black textbox=white,black listbox=white,black actlistbox=black,magenta sellistbox=brightmagenta,black actsellistbox=black,brightmagenta checkbox=brightmagenta,black actcheckbox=black,magenta button=black,magenta actbutton=white,brightmagenta compactbutton=white,black entry=white,black disentry=gray,black emptyscale=,black fullscale=,magenta helpline=white,black'}
+export NEWT_COLORS=${NEWT_COLORS:-'root=brightblue,black roottext=brightblue,black window=white,black border=blue,black title=brightblue,black textbox=white,black listbox=white,black actlistbox=black,blue sellistbox=brightblue,black actsellistbox=black,brightblue checkbox=brightblue,black actcheckbox=black,blue button=black,blue actbutton=white,brightblue compactbutton=white,black entry=white,black disentry=gray,black emptyscale=,black fullscale=,blue helpline=white,black'}
 banner() {
   local c1="" c2="" c3="" r="" utf=0
   if [ -t 1 ]; then
-    if [[ ${TERM:-} == *256color* ]]; then c1=$'\e[38;5;135m' c2=$'\e[38;5;171m' c3=$'\e[38;5;117m'
-    else c1=$'\e[35m' c2=$'\e[95m' c3=$'\e[36m'; fi
+    if [[ ${TERM:-} == *256color* ]]; then c1=$'\e[38;5;75m' c2=$'\e[38;5;111m' c3=$'\e[38;5;153m'
+    else c1=$'\e[34m' c2=$'\e[94m' c3=$'\e[96m'; fi
     r=$'\e[0m'
   fi
   [[ "$(locale charmap 2>/dev/null)" == UTF-8 ]] && utf=1

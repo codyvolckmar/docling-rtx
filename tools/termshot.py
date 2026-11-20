@@ -11,9 +11,9 @@ from PIL import Image, ImageDraw, ImageFont
 ROWS, COLS = 34, 124
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
-BG = (17, 12, 26)
-PALETTE = [(17, 12, 26), (224, 88, 104), (96, 200, 140), (230, 192, 110), (100, 148, 240), (178, 110, 232), (86, 196, 214), (214, 214, 222),
-           (96, 88, 112), (255, 120, 136), (130, 230, 170), (255, 220, 140), (140, 180, 255), (226, 150, 255), (130, 226, 240), (250, 250, 255)]
+BG = (10, 15, 26)
+PALETTE = [(10, 15, 26), (224, 88, 104), (96, 200, 140), (230, 192, 110), (95, 175, 255), (135, 175, 255), (86, 196, 214), (214, 214, 222),
+           (96, 88, 112), (255, 120, 136), (130, 230, 170), (255, 220, 140), (140, 180, 255), (175, 219, 255), (130, 226, 240), (250, 250, 255)]
 ACS = {'j': '┘', 'k': '┐', 'l': '┌', 'm': '└', 'n': '┼', 'q': '─', 't': '├', 'u': '┤', 'v': '┴', 'w': '┬', 'x': '│',
        'a': '▒', '`': '◆', '~': '·', '0': '█', 'h': '▒', 'f': '°', 'g': '±', '+': '→', ',': '←', '-': '↑', '.': '↓', 'o': '⎺', 's': '⎽'}
 
@@ -210,13 +210,13 @@ class Screen:
         cw = round(font.getlength('M')); ch = 21
         pad, bar = 18, 34
         W, H = COLS * cw + pad * 2, ROWS * ch + pad * 2 + bar
-        img = Image.new('RGB', (W, H), (40, 30, 56))
+        img = Image.new('RGB', (W, H), (13, 21, 38))
         d = ImageDraw.Draw(img)
-        d.rounded_rectangle([0, 0, W - 1, H - 1], radius=12, fill=BG, outline=(70, 52, 98), width=2)
-        d.rectangle([2, 2, W - 3, bar], fill=(34, 25, 48))
+        d.rounded_rectangle([0, 0, W - 1, H - 1], radius=12, fill=BG, outline=(34, 48, 73), width=2)
+        d.rectangle([2, 2, W - 3, bar], fill=(21, 34, 60))
         for k, col in enumerate([(255, 95, 87), (254, 188, 46), (40, 200, 64)]):
             d.ellipse([16 + k * 22, 11, 28 + k * 22, 23], fill=col)
-        d.text((W // 2, bar // 2 + 1), title, font=font, fill=(200, 180, 230), anchor='mm')
+        d.text((W // 2, bar // 2 + 1), title, font=font, fill=(214, 227, 245), anchor='mm')
         y0 = bar + pad
         for r in range(ROWS):
             for c in range(COLS):
