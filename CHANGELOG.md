@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **OBLITERATUS models (uncensored abliterations, published Aug-Nov 2026).** Listed last, so they are never pre-selected:
+  - llama.cpp: Qwen3.8 27B OBLITERATED (V3), Ornith 1.5 9B OBLITERATED, feyospace-s1 OBLITERATED (cybersecurity ~28B, mradermacher's GGUFs). All three use their built-in MTP layer.
+  - Ollama (opt-in Hugging Face rows): Llama 3.1 8B Lexi V2 OBLITERATED, Qwen3 4B structured-output stage A OBLITERATED.
+  - Qwen3.8 27B OBLITERATED's GGUFs ship a template without tool support, so Summon serves Qwen3.8's official template (pinned revision, sha256-checked) with thinking off and the card's repetition penalty 1.15.
+  - DeepSeek V4.1 Flash OBLITERATED (748B MoE, HumanjavaEnterprises' 2.66-bit GGUF, 237 GB in 26 files): routed experts in RAM with a GPU expert cache, the 103 GB Engram table read from disk, the official template for DSML tool calls, and unsloth's DSpark drafter when it fits. Offered on a 96 GB card with ~130 GB free RAM, or ~160 GB of VRAM across cards (all on the GPUs).
+  - Not added: Mistral 7B v0.3 (base model, no chat), GLM-4 9B chat (its GGUF lost the 128K RoPE scaling), Qwen3.8 27B E03 (already here via `robit/` builds; OBLITERATUS ships no GGUF).
+- **The menu shows only models that fit** this machine (VRAM, and RAM for experts-in-RAM). The rest are listed in one line instead of as `TOO BIG` rows.
+- llama.cpp catalog: per-model chat template override (`LC_TEMPLATE`), extra server arguments (`LC_ARGS`), file-name separator (`LC_FILE_SEP`), split GGUFs (`LC_PARTS`, every part verified, disk checked up front), weights kept on host/disk (`LC_HOST_PCT`) and DSpark drafters.
+- Fix: with experts in RAM, the host-RAM prompt cache no longer counts the RAM the experts will use.
+- `SUMMON_GPU="H100:81559:2"` previews multi-GPU machines in dry runs.
+
 ## v1.1.0 (2026-11-19)
 
 - **Draft models (speculative decoding).** Each llama.cpp model gets its draft, combined with n-gram drafts:
