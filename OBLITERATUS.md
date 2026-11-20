@@ -79,3 +79,9 @@ Running these by hand is easy to get subtly wrong. Here's what Summon handles.
 - DSpark drafter: [unsloth](https://huggingface.co/unsloth/DeepSeek-V4.1-Flash-1017-GGUF).
 - Base models: Qwen, ornith-ai, Verapraxis (feyospace), DeepSeek, Meta, Orenguteng (Lexi).
 - Runtime: [llama.cpp](https://github.com/ggml-org/llama.cpp).
+
+## Questions?
+
+> **Cody Volckmar** · [cody.volckmar@gmail.com](mailto:cody.volckmar@gmail.com)
+>
+> Questions about running these models with Summon? Email me, or open a [GitHub issue](https://github.com/codyvolckmar/summon/issues).
