@@ -11,46 +11,43 @@
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:image" content="https://codyvolckmar.github.io/summon/img/summon-hero.png">
 <style>
-  :root { --bg:#0e0a16; --panel:#171024; --line:#2e2244; --text:#e9e4f2; --dim:#a99fbd; --mag:#c77dff; --mag2:#e29bff; --cyan:#6fd6ea; --ok:#7be3a6; }
+  :root { --bg:#0a0f1a; --panel:#111827; --line:#223049; --text:#e8edf5; --dim:#94a3b8; --acc:#4c8dff; --acc2:#8ab4ff; --cyan:#58a6ff; --ok:#5ecb8f; }
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
-  body { margin:0; background: radial-gradient(1200px 600px at 50% -200px, #2a1745 0%, var(--bg) 60%) fixed, var(--bg);
+  body { margin:0; background: radial-gradient(1200px 600px at 50% -200px, #15223c 0%, var(--bg) 60%) fixed, var(--bg);
          color:var(--text); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif; }
   a { color: var(--cyan); }
   .wrap { max-width: 1060px; margin: 0 auto; padding: 0 22px; }
   header { text-align:center; padding: 64px 0 24px; }
-  .logo { font: 700 clamp(48px, 11vw, 112px)/1 ui-monospace, "DejaVu Sans Mono", Menlo, monospace; letter-spacing: .14em;
-          background: linear-gradient(180deg, var(--mag2), #8f4fd8); -webkit-background-clip:text; background-clip:text; color:transparent;
-          text-shadow: 0 0 40px rgba(199,125,255,.25); margin: 0; }
-  .stars { color: var(--mag); letter-spacing: 1.2em; opacity:.8; font-size: 14px; }
+  .logo { font: 700 clamp(48px, 11vw, 112px)/1 ui-monospace, "DejaVu Sans Mono", Menlo, monospace; letter-spacing: .14em; color:#eef3fa; margin: 0; }
   .tag { color: var(--cyan); font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .35em; text-transform: uppercase; margin: 14px 0 0; }
   .lede { max-width: 720px; margin: 22px auto 0; font-size: 19px; color: var(--text); }
-  .lede b { color: var(--mag2); }
+  .lede b { color: var(--acc2); }
   section { margin: 46px 0; }
   h2 { font-size: 26px; margin: 0 0 14px; }
-  h2 span { color: var(--mag); }
+  h2 span { color: var(--acc); }
   .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
   .card { background: var(--panel); border:1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
   .card h3 { margin: 0 0 6px; font-size: 17px; }
   .card p { margin: 0; color: var(--dim); }
-  .cmd { position: relative; background:#0a0712; border:1px solid var(--line); border-radius: 12px; padding: 14px 92px 14px 16px; margin: 10px 0;
+  .cmd { position: relative; background:#070c14; border:1px solid var(--line); border-radius: 12px; padding: 14px 92px 14px 16px; margin: 10px 0;
          font: 15px/1.5 ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace; color: var(--ok); overflow-x: auto; white-space: nowrap; }
   .cmd .os { display:block; font: 600 12px/1 system-ui, sans-serif; color: var(--dim); text-transform: uppercase; letter-spacing: .12em; margin-bottom: 8px; }
-  .cmd button { position:absolute; right: 10px; top: 50%; transform: translateY(-50%); background: var(--mag); color:#140b20; border:0; border-radius: 8px;
+  .cmd button { position:absolute; right: 10px; top: 50%; transform: translateY(-50%); background: var(--acc); color:#0a1220; border:0; border-radius: 8px;
                 padding: 7px 12px; font: 700 13px system-ui, sans-serif; cursor: pointer; }
-  .cmd button:hover { background: var(--mag2); }
+  .cmd button:hover { background: var(--acc2); }
   .note { color: var(--dim); font-size: 14px; }
-  code { font: 14px ui-monospace, monospace; background:#21182f; padding: 1px 6px; border-radius: 6px; color: var(--mag2); }
+  code { font: 14px ui-monospace, monospace; background:#1a2333; padding: 1px 6px; border-radius: 6px; color: var(--acc2); }
   table { width:100%; border-collapse: collapse; background: var(--panel); border:1px solid var(--line); border-radius: 14px; overflow:hidden; }
   th, td { text-align:left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { color: var(--mag2); font-weight: 600; background:#1d1430; }
+  th { color: var(--acc2); font-weight: 600; background:#152036; }
   tr:last-child td { border-bottom: 0; }
   .shots { display:grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 18px; }
   figure { margin:0; background: var(--panel); border:1px solid var(--line); border-radius: 14px; padding: 10px; }
   figure img { width:100%; height:auto; display:block; border-radius: 8px; }
   figcaption { color: var(--dim); font-size: 14px; padding: 8px 4px 2px; }
   ol.steps { padding-left: 22px; } ol.steps li { margin: 6px 0; }
-  .warn { border-left: 3px solid var(--mag); padding: 10px 16px; background: #1a1229; border-radius: 0 10px 10px 0; color: var(--dim); }
+  .warn { border-left: 3px solid var(--acc); padding: 10px 16px; background: #0e1728; border-radius: 0 10px 10px 0; color: var(--dim); }
   footer { color: var(--dim); text-align:center; padding: 40px 0 60px; font-size: 14px; }
   @media (max-width: 560px) { .shots { grid-template-columns: 1fr; } .cmd { padding-right: 16px; } .cmd button { position: static; transform:none; margin-top: 10px; } }
 </style>
@@ -59,7 +56,6 @@
 <div class="wrap">
 
 <header>
-  <div class="stars">✦ · ✦ · ✦</div>
   <h1 class="logo">SUMMON</h1>
   <p class="tag">AI · Open-source · Private · Intelligence</p>
   <p class="note" style="margin:6px 0 0">v1.2.0 · <a href="https://github.com/codyvolckmar/summon/blob/main/CHANGELOG.md">what's new: API keys, HTTPS tunnel, uncensored models</a></p>
