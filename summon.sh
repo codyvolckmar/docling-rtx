@@ -14,9 +14,12 @@
 #               crawl on the CPU), or MoE experts in RAM with the hot ones cached on the GPU ("+RAM" in the
 #               menu); each model's own chat template or a pinned fixed one; host-RAM prompt cache; /metrics.
 #               Ollama models instead install Ollama (no Docker), pull the model and serve it with its context set.
-#   5. Lock     Port firewalled to your SSH IP (rented pods) or bound to 127.0.0.1 (your own PC).
-#   6. Test     A tool call must come back as an OpenAI tool_calls entry. Then it prints the URL, model name and
-#               the context window to set in your client.
+#   5. Secure   llama.cpp: an API key (generated once, kept across reruns). Your own PC: 127.0.0.1 only. Rented
+#               pod: port open, key required; TUNNEL=1 adds a free HTTPS URL instead. Ollama has no keys, so its
+#               port is firewalled to your SSH IP (rented pods) or bound to 127.0.0.1 (your own PC).
+#   6. Test     A tool call must come back as an OpenAI tool_calls entry.
+#   7. Connect  Prints the browser chat page, the API key and copy-paste setup for Hermes Agent, pi, opencode,
+#               OpenClaw and Cursor (again any time: --connect).
 #   One engine runs at a time: starting one stops the other (they would fight over VRAM and the port).
 #   Rerunning is cheap: downloaded models are kept, so switching models or settings only restarts the server.
 #
@@ -38,15 +41,21 @@
 #   ./summon.sh ollama [PORT]             the menu, with the recommended Ollama model pre-selected
 #   ./summon.sh --dry-run [PORT]          the whole wizard, then print the plan: installs and downloads nothing
 #   ./summon.sh --verify ...              also hash the whole model file with sha256 (slow)
-#   ./summon.sh --lock [PORT]             re-lock the port to your current IP (new home IP, after a reboot)
+#   ./summon.sh --connect                 show the chat page, API key and client setup of the running server
+#   ./summon.sh --new-key MODEL_ID [PORT] start with a new API key (the old one stops working)
+#   ./summon.sh --lock [PORT]             firewall the port to your current IP (ALLOW_IP=... to choose)
 #   ./summon.sh --uninstall [llamacpp|ollama] [-y]   remove one engine (or both) and its model files
 #   ./summon.sh --help | --version        this text / the version
 #   The one-line installer saves this script as ~/.summon/summon.sh: rerun that for every command above.
 #
 # OPTIONS (environment variables, put them before the command; they skip the matching menu step)
 #   Access
-#     ALLOW_IP=1.2.3.4,5.6.7.0/24   share the port with these addresses (default: your SSH IP, or 127.0.0.1 only)
-#     ALLOW_IP=any                  open the port to everyone (only on a trusted network)
+#     API_KEY=sk-...                use this API key (llama.cpp); API_KEY=none = no key, IP lock as for Ollama
+#     TUNNEL=1                      public HTTPS URL via a Cloudflare quick tunnel (free, no account; needed for
+#                                   Cursor). The URL changes when the tunnel restarts: --connect shows the current one
+#     ALLOW_IP=1.2.3.4,5.6.7.0/24   firewall the port to these addresses (llama.cpp: on top of the key)
+#     ALLOW_IP=any                  your own PC: listen on all interfaces (default there: 127.0.0.1 only)
+#     PUBLIC_HOST=gpu.example.com   the address to print in client setup (default: public IP via api.ipify.org)
 #   llama.cpp models
 #     CTX=131072                    context window in tokens (skips step 1)
 #     QUANT=Q8_0                    weights, e.g. Q8_0 Q6_K Q4_K_M IQ4_XS (skips step 2; must fit at CTX)
@@ -69,12 +78,14 @@
 #   CTX=131072 QUANT=Q8_0 ./summon.sh thinkingcap 20000      no menus: ThinkingCap, 128K, 8-bit weights
 #   SPEC=off CTX=131072 QUANT=Q8_0 ./summon.sh thinkingcap 20000   same without speculation (speed baseline)
 #   SUMMON_GPU="RTX PRO 6000:97887" SUMMON_RAM=262144 ./summon.sh --dry-run deepseek41obl   would DeepSeek fit?
-#   ALLOW_IP=203.0.113.7 ./summon.sh nanbeige 20000          serve Nanbeige to one extra address
+#   TUNNEL=1 ./summon.sh thinkingcap 20000                   HTTPS URL for Cursor and phones, port stays private
+#   ALLOW_IP=203.0.113.7 ./summon.sh nanbeige 20000          key + firewall to one address
 #
 # NOTES
 #   Speculative decoding keeps quality on average but isn't bit-identical: verifying a batch of drafted tokens
 #   changes float rounding, so near-tied tokens can flip. Use SPEC=off when you need reproducible outputs.
-#   Logs: docker logs -f summon. Speed and draft acceptance: http://<host>:PORT/metrics.
+#   The API key travels in plain text over http://IP:PORT; use TUNNEL=1 (HTTPS) on untrusted networks.
+#   Logs: docker logs -f summon. Speed and draft acceptance: http://<host>:PORT/metrics (send the key).
 set -e
 export DEBIAN_FRONTEND=noninteractive
 SUMMON_VERSION=1.1.0
@@ -566,7 +577,14 @@ access_mode() {
   HOST_HINT="<this-host>"; [ "$ACCESS" = local ] && HOST_HINT=localhost
   return 0
 }
-access_text() {
+access_text() {   # $1 = llamacpp|ollama
+  if [ "${1:-}" = llamacpp ] && (( KEY_ON )); then
+    if (( TUNNEL_ON )); then echo "API key + HTTPS through a Cloudflare tunnel (the port itself only listens on 127.0.0.1)"
+    elif [ "$ACCESS" = local ]; then echo "API key, and only this computer (127.0.0.1). Share it: ALLOW_IP=any or TUNNEL=1"
+    elif [ -n "${ALLOW_IP:-}" ] && [ "$ALLOW_IP" != any ]; then echo "API key + firewall: only ${ALLOW_IP}"
+    else echo "API key required (port open to the internet, no IP lock; ALLOW_IP=<ip> adds one)"; fi
+    return 0
+  fi
   case "$ACCESS" in
     local)  echo "local: only this computer (127.0.0.1). Share it with ALLOW_IP=<ip> or ALLOW_IP=any" ;;
     locked) echo "locked to ${ALLOW_IP:-your SSH IP ${SSH_CLIENT%% *}}" ;;
@@ -574,12 +592,107 @@ access_text() {
   esac
 }
 apply_access() {   # $1 = docker|host
+  # llama.cpp with an API key: the key is the lock. The firewall is only added on request (ALLOW_IP=<ips>).
+  if [ "$1" = docker ] && (( KEY_ON )); then
+    if [ "$ACCESS" = local ] || (( TUNNEL_ON )); then unlock DOCKER-USER
+    elif [ -n "${ALLOW_IP:-}" ] && [ "$ALLOW_IP" != any ]; then lock_port "$PORT" docker
+    else unlock DOCKER-USER; fi
+    return 0
+  fi
   if [ "$ACCESS" = local ]; then
     if [ "$1" = docker ]; then unlock DOCKER-USER; else unlock INPUT; fi
     echo "Local mode: only this computer can reach port $PORT (ALLOW_IP=<ip> to share it)."
   else
     lock_port "$PORT" "$1"
   fi
+}
+
+# --- API key, public address, HTTPS tunnel and client setup (llama.cpp gets a key; Ollama has no auth) ---
+# The key is generated once and kept in the data folder, so clients keep working across reruns and model
+# switches. API_KEY=<value> sets your own, API_KEY=none turns it off (back to IP locking), --new-key rotates it.
+SUMMON_HOME=${HOME:-/root}/.summon
+CONNECT_STATE=$SUMMON_HOME/connect.env
+TUNNEL_NAME=summon-tunnel
+TUNNEL_IMAGE=cloudflare/cloudflared:2026.11.1      # Cloudflare quick tunnel: free, no account, HTTPS
+KEY_ON=1; [ "${API_KEY:-}" = none ] && KEY_ON=0
+TUNNEL_ON=0; [ "${TUNNEL:-}" = 1 ] && TUNNEL_ON=1
+if (( TUNNEL_ON && ! KEY_ON )); then
+  echo "TUNNEL=1 with API_KEY=none would publish an unauthenticated public URL. Keep the key (drop API_KEY=none)."; exit 1
+fi
+ensure_api_key() {   # $1 = key file: keep it, or create it (API_KEY=... or random); never printed to logs
+  if [ -n "${API_KEY:-}" ] && [ "$API_KEY" != none ]; then printf '%s\n' "$API_KEY" > "$1"
+  elif (( NEW_KEY )) || [ ! -s "$1" ]; then
+    printf 'sk-summon-%s\n' "$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | cut -c1-32)" > "$1"
+  fi
+  chmod 600 "$1"
+}
+public_host() {   # how clients reach this machine: PUBLIC_HOST, localhost, or the public IP (api.ipify.org)
+  local ip
+  if [ -n "${PUBLIC_HOST:-}" ]; then echo "$PUBLIC_HOST"; return 0; fi
+  if [ "$ACCESS" = local ]; then echo localhost; return 0; fi
+  ip=$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)
+  if [[ $ip =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then echo "$ip"; else echo "<this-host>"; fi
+}
+tunnel_url() { docker logs "$TUNNEL_NAME" 2>&1 | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1; }
+start_tunnel() {   # $1 = local port -> TUNNEL_URL. A quick tunnel gets a new URL each time it starts.
+  local i
+  docker rm -f "$TUNNEL_NAME" >/dev/null 2>&1 || true
+  docker run -d --name "$TUNNEL_NAME" --restart unless-stopped --network host "$TUNNEL_IMAGE" \
+    tunnel --no-autoupdate --url "http://127.0.0.1:$1" >/dev/null
+  TUNNEL_URL=""
+  for i in $(seq 60); do TUNNEL_URL=$(tunnel_url); [ -n "$TUNNEL_URL" ] && break; sleep 1; done
+  return 0
+}
+save_connect() {   # remember how to reach the server, for --connect
+  mkdir -p "$SUMMON_HOME"
+  { printf 'C_ENGINE=%q\nC_URL=%q\nC_MODEL=%q\nC_TITLE=%q\nC_CTX=%q\nC_REASON=%q\nC_KEYFILE=%q\nC_TUNNEL=%q\nC_CHAT=%q\n' \
+      "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9"; } > "$CONNECT_STATE"
+  chmod 600 "$CONNECT_STATE"
+}
+print_connect() {   # reads $CONNECT_STATE: chat page, endpoint and copy-paste setup for common agents
+  # shellcheck disable=SC1090
+  . "$CONNECT_STATE"
+  local url=$C_URL key=ollama https=0 t
+  if [ "$C_TUNNEL" = 1 ]; then t=$(tunnel_url); [ -n "$t" ] && url=$t; fi
+  [[ $url == https://* ]] && https=1
+  [ -n "$C_KEYFILE" ] && [ -s "$C_KEYFILE" ] && key=$(head -1 "$C_KEYFILE")
+  local base="$url/v1" out=$((C_CTX >= 65536 ? 32768 : C_CTX / 4))
+  cat <<EOF
+
+==== Connect ====  (show this again: $0 --connect)
+$( [ "$C_CHAT" = 1 ] && echo "  Chat in your browser:  $url   (it asks for the API key once)" )
+  Base URL:  $base
+  Model:     $C_MODEL        Context window: $C_CTX tokens
+  API key:   $key$( [ -n "$C_KEYFILE" ] && echo "   (kept in $C_KEYFILE; rotate: $0 --new-key ...)" )
+$( [[ $url == *"<this-host>"* ]] && echo "  Replace <this-host> with this machine's public address (or rerun with PUBLIC_HOST=... / TUNNEL=1)." )
+-- Hermes Agent: ~/.hermes/config.yaml (or run: hermes model -> Custom endpoint)
+model:
+  default: $C_MODEL
+  provider: custom
+  base_url: $base
+  api_key: $key
+  context_length: $C_CTX
+
+-- pi: add this provider to ~/.pi/agent/models.json, then /model -> summon/$C_MODEL
+{"providers": {"summon": {"baseUrl": "$base", "api": "openai-completions", "apiKey": "$key",
+  "models": [{"id": "$C_MODEL", "name": "$C_TITLE", "reasoning": $C_REASON, "contextWindow": $C_CTX, "maxTokens": $out}]}}}
+
+-- opencode: add to ~/.config/opencode/opencode.json (or a project's opencode.json), then /models
+{"\$schema": "https://opencode.ai/config.json", "model": "summon/$C_MODEL",
+ "provider": {"summon": {"npm": "@ai-sdk/openai-compatible", "name": "Summon", "options": {"baseURL": "$base", "apiKey": "$key"},
+  "models": {"$C_MODEL": {"name": "$C_TITLE", "limit": {"context": $C_CTX, "output": $out}}}}}}
+
+-- OpenClaw: merge into ~/.openclaw/openclaw.json
+{"models": {"mode": "merge", "providers": {"summon": {"baseUrl": "$base", "apiKey": "$key", "api": "openai-completions",
+  "models": [{"id": "$C_MODEL", "name": "$C_TITLE", "reasoning": $C_REASON, "input": ["text"], "contextWindow": $C_CTX, "maxTokens": $out}]}}},
+ "agents": {"defaults": {"model": {"primary": "summon/$C_MODEL"}}}}
+
+-- Cursor: Settings > Models > API Keys: OpenAI API Key = the key above, Override OpenAI Base URL = $base,
+   then add a custom model named $C_MODEL. Cursor calls models from its own servers, so it needs a public HTTPS URL:
+$( if (( https )); then echo "   this one is (TUNNEL=1). It changes when the tunnel restarts: rerun $0 --connect for the current one."
+   elif [ "$C_ENGINE" = ollama ]; then echo "   not available for Ollama models here; use a llama.cpp model with TUNNEL=1."
+   else echo "   rerun with TUNNEL=1 (e.g. TUNNEL=1 $0 PORT) to get one."; fi )
+EOF
 }
 
 # --- Our servers ---
@@ -598,7 +711,7 @@ ol_port() { ss -ltnp 2>/dev/null | awk '/"ollama"/ {n=split($4,a,":"); print a[n
 stop_llamacpp() {
   local n
   if command -v docker >/dev/null; then
-    for n in "$LC_NAME" "${LC_OLD_NAMES[@]}"; do docker rm -f "$n" >/dev/null 2>&1 || true; done
+    for n in "$LC_NAME" "${LC_OLD_NAMES[@]}" "$TUNNEL_NAME"; do docker rm -f "$n" >/dev/null 2>&1 || true; done
   fi
   unlock DOCKER-USER
 }
@@ -612,11 +725,13 @@ wait_port_free() {   # after stopping our servers: give them 5 s to let go, then
 # ======================================================================================================
 # Arguments
 # ======================================================================================================
-ACTION=install PORT="" TARGET="" YES=0 DRY_RUN=0
+ACTION=install PORT="" TARGET="" YES=0 DRY_RUN=0 NEW_KEY=0
 while (( $# )); do
   case "$1" in
     --uninstall) ACTION=uninstall ;;
     --lock) ACTION=lock ;;
+    --connect) ACTION=connect ;;
+    --new-key) NEW_KEY=1 ;;
     --verify) VERIFY_SHA256=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --version) echo "summon $SUMMON_VERSION"; exit 0 ;;
@@ -642,6 +757,13 @@ if [ "$ACTION" = lock ]; then
   exit 0
 fi
 
+# --- Connect: print the chat page, endpoint and client setup of the server we started last ---
+if [ "$ACTION" = connect ]; then
+  [ -s "$CONNECT_STATE" ] || { echo "No Summon server set up yet (nothing in $CONNECT_STATE). Run $0 first."; exit 1; }
+  lc_running || ol_running || echo "Note: no Summon server is running right now; this is the last one set up."
+  print_connect; exit 0
+fi
+
 # --- Uninstall: one engine by name, or both (a llama.cpp model name means the whole llama.cpp engine) ---
 if [ "$ACTION" = uninstall ]; then
   case "$TARGET" in nanbeige|qwen38pi|ornith35b|ornith9b|thinkingcap|qwen38obl|ornith9bobl|feyospace|deepseek41obl|llama.cpp) TARGET=llamacpp ;; esac
@@ -651,6 +773,10 @@ if [ "$ACTION" = uninstall ]; then
     for d in /root/.ollama /usr/share/ollama ${OLLAMA_MODELS:+"$OLLAMA_MODELS"}; do [ -d "$d" ] && DIRS+=("$d"); done
   fi
   USED=$(du -shc "${DIRS[@]}" 2>/dev/null | tail -1 | cut -f1)
+  if (( DRY_RUN )); then
+    echo "DRY RUN: would remove ${TARGET:-llama.cpp and Ollama} and delete ${DIRS[*]:-(no model folders found)} (~${USED:-0}). Nothing done."
+    exit 0
+  fi
   if (( ! YES )); then
     read -rp "Remove ${TARGET:-llama.cpp and Ollama} and DELETE the model files in ${DIRS[*]:-(none)} (~${USED:-0})? [y/N] " a || true
     [[ $a == [yY]* ]] || { echo "Cancelled."; exit 0; }
@@ -659,6 +785,8 @@ if [ "$ACTION" = uninstall ]; then
     stop_llamacpp
     if command -v docker >/dev/null; then docker rmi "$LC_IMAGE" >/dev/null 2>&1 || true; fi
     for d in "${LC_DIRS[@]}"; do rm -rf "$d"; done
+    docker rmi "$TUNNEL_IMAGE" >/dev/null 2>&1 || true
+    grep -q '^C_ENGINE=llamacpp' "$CONNECT_STATE" 2>/dev/null && rm -f "$CONNECT_STATE"
     echo "llama.cpp server and its model files removed. Docker itself is left installed."
   fi
   if [ "$TARGET" != llamacpp ]; then
@@ -673,6 +801,7 @@ if [ "$ACTION" = uninstall ]; then
     BIN=$(command -v ollama || true)
     if [ -n "$BIN" ]; then rm -f "$BIN"; rm -rf "$(dirname "$(dirname "$BIN")")/lib/ollama"; fi
     rm -rf /root/.ollama /usr/share/ollama ${OLLAMA_MODELS:+"$OLLAMA_MODELS"}
+    grep -q '^C_ENGINE=ollama' "$CONNECT_STATE" 2>/dev/null && rm -f "$CONNECT_STATE"
     id ollama >/dev/null 2>&1 && userdel ollama 2>/dev/null || true
     getent group ollama >/dev/null && groupdel ollama 2>/dev/null || true
     echo "Ollama and all its models removed."
@@ -1233,10 +1362,13 @@ install_llamacpp() {
     [ -n "$LC_KWARGS" ] && echo "     chat template: $LC_KWARGS"
     [ -n "$LC_TEMPLATE" ] && echo "     chat template file: ${LC_TEMPLATE##*|} (sha256-checked; replaces the GGUF's own)"
     (( ${#LC_ARGS[@]} )) && echo "     extra: ${LC_ARGS[*]}"
-    echo "  5. Access: $(access_text)"
+    echo "  5. Access: $(access_text llamacpp)"
+    (( KEY_ON )) && echo "     API key: generated once and kept in the data folder (API_KEY=... to set your own)"
+    (( TUNNEL_ON )) && echo "     + Cloudflare quick tunnel ($TUNNEL_IMAGE): a public https://...trycloudflare.com URL"
     echo "  6. Wait for /health, then test a tool call. Metrics at /metrics (Prometheus format)"
+    echo "  7. Print the chat page URL, the API key and setup for Hermes, pi, opencode, OpenClaw and Cursor"
     echo
-    echo "Endpoint: http://$HOST_HINT:$PORT/v1   model: $LC_ALIAS   context window: $CTX_SEL"
+    echo "Endpoint: http://$HOST_HINT:$PORT/v1   model: $LC_ALIAS   context window: $CTX_SEL   chat page: http://$HOST_HINT:$PORT"
     echo "Run it for real:       $0 $LC_ID $PORT"
     echo "Same, without menus:   CTX=$CTX_SEL QUANT=$QUANT_SEL DRAFT=$( (( LC_DRAFT_ON )) && echo on || echo off) $0 $LC_ID $PORT"
     return 0
@@ -1326,6 +1458,12 @@ install_llamacpp() {
   # --- Start (or replace) the server ---
   wait "$PULL_PID" || docker pull -q "$LC_IMAGE" >/dev/null   # retry in the foreground so a pull error shows
   stop_ollama; stop_llamacpp; wait_port_free
+  (( TUNNEL_ON )) && BIND=127.0.0.1   # the tunnel reaches it locally; nothing else needs the raw port
+  local KEY_FILE="" DOCKER_ARGS=()
+  if (( KEY_ON )); then
+    KEY_FILE="$DDIR/api-key"; ensure_api_key "$KEY_FILE"
+    DOCKER_ARGS=(-v "$KEY_FILE:/run/summon/api-key:ro")
+  fi
   apply_access docker   # before the port opens
   # Prompt cache in host RAM: with one slot, a side request (chat title, subagent) overwrites the main
   # conversation's K/V. llama-server parks the old state in RAM first, but its default 8 GiB cap holds only ~75K
@@ -1337,6 +1475,7 @@ install_llamacpp() {
   # --metrics: Prometheus-format stats at /metrics (tokens/s, prompt and decode counts, draft acceptance, KV use).
   # Same port and access rules as the API: local mode / your IP only.
   SERVER_ARGS=(--cache-ram "$CACHE_RAM_MB" --metrics)
+  (( KEY_ON )) && SERVER_ARGS+=(--api-key-file /run/summon/api-key)   # chat page and /health stay public
   if [ -n "${THINK_BUDGET:-}" ]; then SERVER_ARGS+=(--reasoning-budget "$THINK_BUDGET"); fi
   if [ -n "$TOP_K" ]; then SERVER_ARGS+=(--top-k "$TOP_K"); fi
   if [ -n "$LC_KWARGS" ]; then SERVER_ARGS+=(--chat-template-kwargs "$LC_KWARGS"); fi
@@ -1369,7 +1508,7 @@ install_llamacpp() {
   # -ctv q8_0 needs Flash Attention (-fa on). -np 1: one slot, the whole context for one conversation.
   # --cache-reuse: reuse cached K/V chunks when an agent edits earlier messages. --jinja: native XML tool calls.
   docker run -d --name "$LC_NAME" --restart unless-stopped --gpus all \
-    -v "$DDIR/models:/models:ro" -p "$BIND:$PORT:8080" "$LC_IMAGE" \
+    -v "$DDIR/models:/models:ro" "${DOCKER_ARGS[@]}" -p "$BIND:$PORT:8080" "$LC_IMAGE" \
     -m "/models/$FILE" --alias "$LC_ALIAS" --host 0.0.0.0 --port 8080 \
     --jinja \
     -c "$CTX_SEL" -np 1 -ngl 999 --fit off -fa on -ctk "$KV_TYPE_SEL" -ctv "$KV_TYPE_SEL" \
@@ -1391,7 +1530,8 @@ install_llamacpp() {
   # --- Smoke test: a tool call must come back as an OpenAI tool_calls entry ---
   echo "Testing tool calling..."
   local R TOOLS VRAM
-  R=$(curl -fs --max-time 300 "http://127.0.0.1:$PORT/v1/chat/completions" -H 'Content-Type: application/json' -d '{
+  local AUTH=(); (( KEY_ON )) && AUTH=(-H "Authorization: Bearer $(head -1 "$KEY_FILE")")
+  R=$(curl -fs --max-time 300 "http://127.0.0.1:$PORT/v1/chat/completions" "${AUTH[@]}" -H 'Content-Type: application/json' -d '{
     "model": "'"$LC_ALIAS"'", "max_tokens": 4096,
     "messages": [{"role": "user", "content": "What is the weather in Paris? Use the tool."}],
     "tools": [{"type": "function", "function": {"name": "get_weather", "description": "Current weather for a city",
@@ -1399,6 +1539,15 @@ install_llamacpp() {
   if echo "$R" | grep -q '"tool_calls"' && echo "$R" | grep -q 'get_weather'; then TOOLS="OK"; else TOOLS="NOT DETECTED - check: docker logs $LC_NAME"; fi
   VRAM=$(nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader | tr '\n' ' ')
 
+  local URL
+  if (( TUNNEL_ON )); then
+    echo "Opening the HTTPS tunnel..."
+    start_tunnel "$PORT"
+    [ -n "$TUNNEL_URL" ] || echo "The tunnel didn't report a URL; check: docker logs $TUNNEL_NAME"
+    URL=${TUNNEL_URL:-http://$(public_host):$PORT}
+  else
+    URL="http://$(public_host):$PORT"
+  fi
   echo
   echo "Done. $LC_TITLE $QUANT_SEL is serving on $BIND:$PORT (OpenAI API, llama.cpp)"
   echo "  Context:     $CTX_SEL tokens, $KV_TYPE_SEL K/V cache (VRAM used: $VRAM)"
@@ -1406,12 +1555,14 @@ install_llamacpp() {
   echo "  Speculation: $( [ "${SPEC:-}" = off ] && echo off || { (( LC_DRAFT_ON )) && echo "$LC_DRAFT_TITLE + n-gram drafts" || echo "n-gram drafts"; }) (SPEC=off: reproducible runs)"
   (( EXPERTS_RAM )) && echo "  MoE experts: in system RAM, ${MOE_CACHE_MB} MB of hot experts cached on the GPU"
   echo "  Tool calls:  $TOOLS"
-  echo "  Base URL:    http://$HOST_HINT:$PORT/v1     model: $LC_ALIAS     api key: any string"
-  echo "  Access:      $(access_text)"
+  echo "  Access:      $(access_text llamacpp)"
   echo "  Clients:     set the context window to $CTX_SEL; one request at a time (others queue)"
   echo "  Prompt cache: up to $((CACHE_RAM_MB/1024)) GB of host RAM keeps conversations across side requests"
-  echo "  Metrics:     http://$HOST_HINT:$PORT/metrics   (Prometheus format: tok/s, draft acceptance, cache use)"
+  echo "  Metrics:     $URL/metrics   (Prometheus format; send the API key)"
   echo "  Logs:        docker logs -f $LC_NAME          Monitor: btop / nvidia-smi"
+  local REASON=true; [[ $LC_KWARGS == *'"enable_thinking": false'* ]] && REASON=false
+  save_connect llamacpp "$URL" "$LC_ALIAS" "$LC_TITLE" "$CTX_SEL" "$REASON" "$KEY_FILE" "$TUNNEL_ON" 1
+  print_connect
 }
 
 # ======================================================================================================
@@ -1461,7 +1612,7 @@ install_ollama() {
     echo "Would do (dry run, nothing done):"
     echo "  1. Install what's missing: curl, screen, zstd, Ollama"
     echo "  2. Start Ollama on $BIND:$PORT ($KV_TYPE KV cache, 128K default context, models stay loaded)"
-    echo "  3. Access: $(access_text)"
+    echo "  3. Access: $(access_text ollama)  (Ollama has no API keys)"
     echo "  4. Pull:"
     for i in "${SEL[@]}"; do
       if (( MCTX[i] )); then echo "       ${REF[i]}  ->  $((MCTX[i]/1024))K context, ~${GB[i]} GB VRAM"
@@ -1510,11 +1661,16 @@ install_ollama() {
   echo
   echo "Done. Ollama is serving on $BIND:$PORT ($KV_TYPE KV cache, $((OL_CTX_MAX/1024))K default context, $QUANT_ORDER)"
   for i in "${SEL[@]}"; do echo "  ${REF[i]}  ->  $((MCTX[i] ? MCTX[i]/1024 : 64))K context"; done
-  echo "  Base URL:          http://$HOST_HINT:$PORT/v1     api key: any string"
-  echo "  Access:            $(access_text)"
+  echo "  Access:            $(access_text ollama)  (Ollama has no API keys)"
   echo "  Attach to server:  screen -r ollama   (detach: Ctrl+A then D)"
   echo "  Run a model:       OLLAMA_HOST=127.0.0.1:$PORT ollama run <model>"
   echo "  Monitor:           btop / bmon"
+  if (( ${#SEL[@]} )); then
+    local i0=${SEL[0]}
+    save_connect ollama "http://$(public_host):$PORT" "${REF[i0]}" "${MNAME[i0]}" "$(( MCTX[i0] ? MCTX[i0] : OL_CTX_MIN ))" \
+      "$( [[ ${CAPS[i0]} == *R* ]] && echo true || echo false)" "" 0 0
+    print_connect
+  fi
 }
 
 # ======================================================================================================
