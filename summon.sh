@@ -603,7 +603,8 @@ access_text() {   # $1 = llamacpp|ollama
   fi
   case "$ACCESS" in
     local)  echo "local: only this computer (127.0.0.1). Share it with ALLOW_IP=<ip> or ALLOW_IP=any" ;;
-    locked) echo "locked to ${ALLOW_IP:-your SSH IP ${SSH_CLIENT:-${SSH_CONNECTION%% *}}}" ;;
+    locked) local ssh_ip=${SSH_CLIENT:-${SSH_CONNECTION:-}}   # both start with the client IP, then ports
+            echo "locked to ${ALLOW_IP:-your SSH IP ${ssh_ip%% *}}" ;;
     open)   echo "OPEN to anyone who can reach this machine (ALLOW_IP=any)" ;;
   esac
 }
@@ -849,7 +850,7 @@ lc_file() {   # $1 = quant -> the file llama-server opens (a split GGUF's first 
 # weight bytes, ctx, kv bytes/token -> GPU MB (+ LoRA/draft), without the host-only share (LC_HOST_PCT)
 nb_need_mb() { echo $(( ($1 * (100 - LC_HOST_PCT) / 100 + LC_EXTRA_BYTES) / 1048576 + $2 * $3 / 1048576 )); }
 kv_bytes() { if [ "${1%+ram}" = f16 ]; then echo "$LC_KV_F16"; else echo "$LC_KV_Q8"; fi; }   # "q8_0+ram" -> q8_0
-MOE_MIN_CACHE_PCT=55                           # the GPU expert cache must hold >= 55% of the experts (few RAM reads; 55% accepts the vendor's DeepSeek 128K recipe, ~64%)
+MOE_MIN_CACHE_PCT=60                           # the GPU expert cache must hold >= 60% of the experts (few RAM reads)
 ram_gpu_mb() {   # MoE with experts in RAM: GPU MB for the non-expert weights + extras + cache (no expert cache)
   echo $(( $1 * (100 - LC_EXPERT_PCT - LC_HOST_PCT) / 100 / 1048576 + LC_EXTRA_BYTES / 1048576 + $2 * $(kv_bytes "$3") / 1048576 ))
 }
@@ -870,8 +871,8 @@ draft_auto() {   # $1 = model id -> sets DRAFT=on/off when unset: on if it doesn
 lc_budget() { LC_BUDGET_MB=$(( FREE_MB - LC_OVERHEAD_MB - (GPU_COUNT - 1) * 1024 )); }   # llama.cpp splits layers over all cards
 fit_kv() {   # $1 = weight bytes, $2 = ctx -> most precise cache that fits (f16, then q8_0), or nothing.
   # MoE models that don't fit try the experts-in-RAM tier ("f16+ram"/"q8_0+ram"): the non-expert weights, the
-  # cache and an expert cache holding >= 55% of the experts on the GPU, all routed experts in system RAM (+4 GB).
-  # The 55% rule keeps most expert reads on the GPU; 60% rejected the vendor's 96 GB + 130 GB DeepSeek recipe.
+  # cache and an expert cache holding >= 60% of the experts on the GPU, all routed experts in system RAM (+4 GB).
+  # The 60% rule keeps most expert reads on the GPU, so it favours smaller weights over slow RAM traffic.
   local kv
   for kv in f16 q8_0; do
     if (( $(nb_need_mb "$1" "$2" "$(kv_bytes $kv)") <= LC_BUDGET_MB )); then echo "$kv"; return 0; fi
@@ -1148,15 +1149,6 @@ fetch_gguf() {   # $1 = repo URL, $2 = file, $3 = bytes, $4 = sha256 -> $DDIR/mo
       echo "Reusing the completed download $PART"
     else
       local NEED_MB FREE_DISK_MB RETRY
-      # A .part the server already considers complete makes the resume fail opaquely (curl 33 / HTTP 416):
-      # detect it with a ranged HEAD, then delete and restart.
-      if [ -f "$PART" ]; then
-        local CODE; CODE=$(curl -sIL -o /dev/null -w '%{http_code}' -H "Range: bytes=$(part_size)-" --connect-timeout 10 --max-time 30 "$URL/$FILE" 2>/dev/null) || true
-        if [ "$CODE" = 416 ]; then
-          echo "The server has a complete copy of $FILE (partial is $(part_size) bytes); restarting the download."
-          rm -f "$PART"
-        fi
-      fi
       NEED_MB=$(( (BYTES - $(part_size)) / 1048576 + 1024 ))
       FREE_DISK_MB=$(df -Pm "$DDIR/models" | awk 'NR==2 {print $4}')
       if [ -n "$FREE_DISK_MB" ] && (( FREE_DISK_MB < NEED_MB )); then
@@ -1502,8 +1494,8 @@ install_llamacpp() {
   local AVAIL_MB CACHE_RAM_MB SERVER_ARGS
   AVAIL_MB=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
   (( EXPERTS_RAM )) && AVAIL_MB=$(( AVAIL_MB - BYTES * LC_EXPERT_PCT / 100 / 1048576 ))
-  # Floor: a quarter of the free RAM (a fixed 8 GB would exceed free RAM on small boxes, or lie after the MoE deduction)
-  CACHE_RAM_MB=$(( AVAIL_MB / 2 )); (( CACHE_RAM_MB < AVAIL_MB / 4 )) && CACHE_RAM_MB=$(( AVAIL_MB / 4 ))
+  # Half of the RAM left after the experts; never negative (0 turns the prompt cache off rather than overcommitting RAM)
+  CACHE_RAM_MB=$(( AVAIL_MB / 2 )); (( CACHE_RAM_MB < 0 )) && CACHE_RAM_MB=0
   # --metrics: Prometheus-format stats at /metrics (tokens/s, prompt and decode counts, draft acceptance, KV use).
   # Same port and access rules as the API: local mode / your IP only.
   SERVER_ARGS=(--cache-ram "$CACHE_RAM_MB" --metrics)
