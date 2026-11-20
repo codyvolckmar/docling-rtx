@@ -31,6 +31,8 @@ Piping a script into a shell gives it root. Read [summon.sh](summon.sh) first; i
 
 ## What you can summon
 
+**New:** OBLITERATUS's abliterated models, up to the 748B DeepSeek V4.1 Flash, set up correctly on llama.cpp. See [OBLITERATUS.md](OBLITERATUS.md).
+
 | Model | Engine | 24 GB (RTX 3090/4090) | 48 GB (RTX A6000) |
 |---|---|---|---|
 | **Nanbeige 4.3 33B**: agentic coding, Artificial Analysis index 20 (top of the ≤40B class) | llama.cpp | up to 48K | 128K (Q6_K) · 256K (Q3_K_M) |
