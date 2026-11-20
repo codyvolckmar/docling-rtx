@@ -8,14 +8,17 @@
 #     Ornith 1.5 35B    - fast MoE (3B active), 256K with 8-bit weights on 48 GB; vendor benchmarks only
 #     Ornith 1.5 9B     - fast and light: 256K with 8-bit weights on a 24 GB card (RTX 3090/4090)
 #     ThinkingCap 27B   - Qwen3.8 27B that thinks ~37% less, with its built-in MTP head (PolyForm Small Business)
+#     Uncensored (OBLITERATUS abliterations, refusals removed; never the default):
+#       Qwen3.8 27B OBLITERATED, Ornith 1.5 9B OBLITERATED, feyospace-s1 OBLITERATED (cybersecurity 27B)
 #   Ollama: a ranked menu of other open models (Qwen3.8 27B, Qwen3.6 35B-A3B, Gemma 4 ...), swapped on demand.
 # One engine runs at a time: starting one stops the other (they would fight over VRAM and the port).
 #
 #   ./summon.sh [PORT]                       one menu with every model (llama.cpp + Ollama), then context/weights
-#   ./summon.sh nanbeige|qwen38pi|ornith35b|ornith9b|thinkingcap [PORT]   skip the menu (same as ENGINE=...)
+#   ./summon.sh nanbeige|qwen38pi|ornith35b|ornith9b|thinkingcap|qwen38obl|ornith9bobl|feyospace|deepseek41obl [PORT]
+#                                            skip the menu (same as ENGINE=...)
 #   ./summon.sh ollama [PORT]                the menu, with the recommended Ollama model pre-selected
 #   ./summon.sh --dry-run [PORT]             the whole wizard, then print the plan: installs and downloads nothing
-#                                            SUMMON_GPU="RTX 3090:24576" previews another card (dry runs only)
+#                                            SUMMON_GPU="RTX 3090:24576[:cards]" previews another machine (dry runs only)
 #   ./summon.sh --lock [PORT]                re-lock the port to your current IP (new home IP / after a reboot)
 #   ./summon.sh --uninstall [llamacpp|ollama] [-y]   remove one engine (or both) and its model files
 #   ./summon.sh --help | --version           this text / the version
@@ -51,12 +54,16 @@ LC_OVERHEAD_MB=3584                             # CUDA context + compute buffers
 # Sysbox runtime can't bind into nested containers, so the first folder that mounts wins. (Named after the first
 # model for compatibility: earlier downloads are found again.)
 LC_DIRS=(/root/.nanbeige /var/lib/nanbeige /var/lib/docker/nanbeige-data)
-LC_MODEL_IDS=(nanbeige qwen38pi ornith35b ornith9b thinkingcap)   # order = menu order; first that reaches 128K is the default
-
+LC_MODEL_IDS=(nanbeige qwen38pi ornith35b ornith9b thinkingcap qwen38obl ornith9bobl feyospace deepseek41obl)   # order = menu order; first that reaches 128K is the default
 lc_model() {   # $1 = model id: sets the LC_* settings of that model
   LC_LORA="" LC_EXTRA_BYTES=0   # optional LoRA adapter: "file|bytes|sha256|repo URL" (loaded with --lora)
+  LC_FILE_SEP=-                 # weights file = $LC_FILE_PREFIX$LC_FILE_SEP$QUANT.gguf (mradermacher uses ".")
+  LC_TEMPLATE=""                # optional chat template replacing the GGUF's own: "file|sha256|URL" (--chat-template-file)
+  LC_ARGS=()                    # extra llama-server arguments (e.g. a repeat penalty the model card requires)
+  LC_PARTS=()                   # split GGUF: "NNNNN-of-NNNNN|bytes|sha256" per file, named $prefix$sep$QUANT-$part.gguf
+  LC_HOST_PCT=0                 # share of the weights llama.cpp keeps in host memory/disk (never VRAM), e.g. Engram tables
   # Speculative draft: LC_DRAFT_KIND = model (a small model, -md) | mtp (MTP head file, -md) | mtp-inline (MTP layer
-  # inside the model file) | "" (none). LC_DRAFT = "file|bytes|sha256|repo URL"; LC_DRAFT_KV_F16 = its cache per
+  # inside the model file) | dspark (DeepSeek's DSpark drafter, -md) | "" (none). LC_DRAFT = "file|bytes|sha256|repo URL"; LC_DRAFT_KV_F16 = its cache per
   # token. LC_EXPERT_PCT = share of the weights that are MoE routed experts (they can live in system RAM).
   LC_DRAFT_KIND="" LC_DRAFT="" LC_DRAFT_KV_F16=0 LC_DRAFT_PAD=0 LC_DRAFT_TITLE="" LC_DRAFT_GAIN="" LC_EXPERT_PCT=0
   LC_DRAFT_NMAX=""   # tokens drafted per step (default: 4 for a draft model, 2 for MTP)
@@ -200,6 +207,135 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
       LC_REF_Q=Q4_K_M
       LC_SPEED_NOTE="Thinks ~37% less than Qwen3.8 (vendor, -0.86 pts), so answers finish sooner at the same tok/s."
       ;;
+    qwen38obl)
+      # Qwen3.8 27B OBLITERATED V3 (OBLITERATUS, Apache-2.0, 2026-08-19): abliterated Qwen3.8 27B, refusals and
+      # "safety lecture" deflections removed. Vendor: MMLU 82.3% vs 84.5% stock (-2.1pp). Not tested by AA.
+      # Its GGUFs ship a 506-byte template (no tools, empty-think prefill), so tool calls would fail: Summon serves
+      # Qwen3.8's official template instead (same tokenizer) with enable_thinking false = the same no-think prefill.
+      # Card settings for agents: temp 0.1-0.3 and repetition penalty 1.15 ("critical", greedy loops on tool calls),
+      # no top_p/top_k, thinking off. Read from the GGUF (2026-11-20): qwen35, 64 layers + MTP layer (blk.64).
+      LC_TITLE="Qwen3.8 27B OBLITERATED" LC_ALIAS=qwen3.8-obliterated
+      LC_REPO=https://huggingface.co/OBLITERATUS/Qwen3.8-27B-OBLITERATED/resolve/main
+      LC_FILE_PREFIX=Qwen3.8-27B-OBLITERATED
+      LC_QUANTS=(   # OBLITERATUS's GGUFs, best first: "quant|bytes|sha256"
+        "Q8_0|29047075872|afa839b2fa5bc890e5735031dda2c6239d3b6bba3b6ffa29477cbc14a2e1f221"
+        "Q6_K|22430991392|3535d4a15b75840fb391138ce04e6c73fde709320c6f5fe788cdbd586ee08e3a"
+        "Q5_K_M|19535692832|87a69c85238854607fb58876347471f37db939d121ffc9c3dd18706186fd65f9"
+        "Q4_K_M|16810705952|1f74330b211a8253c96f1bf586cba6eb56d37117c97ed9e6eec18c198a4e7fe5"
+        "IQ4_XS|15420441632|f269deda48b0b703488bed23d7b3152f8003d7bfc14e6a327bd8757a5baac331"
+      )
+      LC_TEMPLATE="Qwen3.8-27B.chat_template.jinja|af16f654968d47d09a6c604e00370b12dbc21f76456f59c9e98b82e84d9f6375|https://huggingface.co/Qwen/Qwen3.8-27B/resolve/37561816e66b5b9153b1b64c10968c18c1e6f4a0/chat_template.jinja"
+      LC_KV_F16=$(( 16 * 4 * 512 * 2 ))             # 65536 bytes/token
+      LC_TEMP=0.2 LC_TOP_P=1.0 LC_TOP_K="" LC_KWARGS='{"enable_thinking": false}'
+      LC_ARGS=(--repeat-penalty 1.15)
+      LC_DRAFT_KIND=mtp-inline LC_DRAFT_KV_F16=$(( 4 * 512 * 2 ))
+      LC_DRAFT_TITLE="Qwen3.8's built-in MTP layer" LC_DRAFT_GAIN="faster decoding, no extra download (acceptance after abliteration unmeasured)"
+      LC_REF_Q=Q4_K_M
+      LC_SPEED_NOTE="Thinking off (as its card recommends), so answers start right away. Not measured on Summon."
+      ;;
+    ornith9bobl)
+      # Ornith 1.5 9B OBLITERATED (OBLITERATUS, MIT, 2026-08-27): 3-round SVD abliteration + per-head attention
+      # surgery of Ornith 1.5 9B. Vendor: MMLU (n=100) 74.8% vs 78.8% stock (-4pp); Q8_0/Q6_K keep the abliteration
+      # best. Same GGUF layout as Ornith 1.5 9B (read 2026-11-20: 32 layers, full attention every 4th, MTP blk.32);
+      # its own template has tools. The card says to run with reasoning off (thinking loops), hence enable_thinking false.
+      LC_TITLE="Ornith 1.5 9B OBLITERATED" LC_ALIAS=ornith-9b-obliterated
+      LC_REPO=https://huggingface.co/OBLITERATUS/Ornith-1.5-9B-OBLITERATED/resolve/main
+      LC_FILE_PREFIX=Ornith-1.5-9B-OBLITERATED
+      LC_QUANTS=(   # OBLITERATUS's GGUFs, best first: "quant|bytes|sha256"
+        "Q8_0|9786060064|e632573df9285acbceac28293ca19d95ffdbd108c05f39d54604d7f97ea4330c"
+        "Q6_K|7558901024|1bbe46fdbf1686ffe49e204e9baa192b256dea4f80f6416ce045bce8126c4a81"
+        "Q5_K_M|6642543904|81b3e622b99126cc5ce35f9c3635642bdf716bf0345726323840d3d38d6fad00"
+        "Q4_K_M|5780090144|88ce99bb696fbc921edc4f995c4beb12a66bf94319d00bfd5f44265d02fa6dfb"
+      )
+      LC_KV_F16=$(( 8 * 4 * 512 * 2 ))             # 32768 bytes/token
+      LC_TEMP=0.6 LC_TOP_P=0.95 LC_TOP_K=20 LC_KWARGS='{"enable_thinking": false}'
+      LC_DRAFT_KIND=mtp-inline LC_DRAFT_KV_F16=$(( 4 * 512 * 2 ))
+      LC_DRAFT_TITLE="Ornith's built-in MTP layer" LC_DRAFT_GAIN="faster decoding, no extra download (speed-up not yet measured)"
+      LC_REF_Q=Q4_K_M
+      LC_SPEED_NOTE="Not measured yet on Summon; a 9B model runs several times faster than a 27B."
+      ;;
+    feyospace)
+      # feyospace-s1 OBLITERATED (OBLITERATUS, Apache-2.0, 2026-10-14): cybersecurity-targeted abliteration of
+      # feyospace-v1.1-small (Verapraxis; ~28B, Qwen3.5 layout) for pentesting, CTFs and vulnerability research.
+      # Vendor: MMLU 82.4% (unchanged), WMDP-Cyber 63.8%, CyberMetric-10K 85.3%; base: CyberGym 84.4%. Its card warns
+      # of sandbox escapes and goal drift in agent runs: isolate the tools. OBLITERATUS ships safetensors only, so the
+      # GGUFs are mradermacher's (read 2026-11-20: qwen35, 64 layers + MTP blk.64, template with tools + thinking).
+      # Base card: thinking on, keep reasoning_content across turns (preserve_thinking defaults to true). No sampling
+      # given: Qwen3.8's thinking-mode settings, as for ThinkingCap.
+      LC_TITLE="feyospace-s1 OBLITERATED" LC_ALIAS=feyospace-s1-obliterated
+      LC_REPO=https://huggingface.co/mradermacher/feyospace-s1-OBLITERATED-GGUF/resolve/main
+      LC_FILE_PREFIX=feyospace-s1-OBLITERATED LC_FILE_SEP=.
+      LC_QUANTS=(   # mradermacher's GGUFs, best first: "quant|bytes|sha256"
+        "Q8_0|29047085184|f0b84738bcb67f6a3981842a5f776eaefeab42d1ecc05aa44b6a263ee39e073e"
+        "Q6_K|22431000704|4134c16e42f7cf5caa50362fe5ad91d13354581dcd217796f25b1e58cf5d2604"
+        "Q5_K_M|19535702144|6875dd3b152f93fae6aaaa4b990aab15af3ba3dbc37998f1cc11dbbddc02009e"
+        "Q4_K_M|16810715264|9facf38c3e7f4ac140ba48847a4b1657198721a917f6f727ccde8d1825701ae4"
+        "IQ4_XS|15420450944|da9b0509d32c94f5a5cbe951d8a146475925ed7af423cc2433baf3d0761c7f5e"
+      )
+      LC_KV_F16=$(( 16 * 4 * 512 * 2 ))             # 65536 bytes/token
+      LC_TEMP=1.0 LC_TOP_P=0.95 LC_TOP_K=20 LC_KWARGS=""
+      LC_DRAFT_KIND=mtp-inline LC_DRAFT_KV_F16=$(( 4 * 512 * 2 ))
+      LC_DRAFT_TITLE="feyospace's built-in MTP layer" LC_DRAFT_GAIN="faster decoding, no extra download (speed-up not yet measured)"
+      LC_REF_Q=Q4_K_M
+      LC_SPEED_NOTE="Thinking on: long reasoning before answers. Not measured on Summon."
+      ;;
+    deepseek41obl)
+      # DeepSeek V4.1 Flash 1017 OBLITERATED (OBLITERATUS, MIT, 2026-10-23): abliterated DeepSeek V4.1 Flash, a 748B MoE
+      # (384 experts, 6 active). OBLITERATUS ships 1.5 TB of safetensors only; this is HumanjavaEnterprises' upstream
+      # GGUF (IQ2_XXS mix, 2.66 bpw, own imatrix; repo rev f80c486): 237,451 MiB in 26 files. Their evals: MMLU 83.6%
+      # (base quant 84.4%), GSM8K 97.2%; refusals 7/20 vs 19/20 for the base (reduced, not removed).
+      # Tensor table, summed over all 26 files (2026-11-20): routed experts 125,955 MiB (53%), Engram tables + per-layer
+      # embeddings 105,678 MiB (44.5%, llama.cpp reads them lazily from disk, never VRAM), the rest 5,818 MiB (GPU).
+      # Their recipe (one 96 GB card + ~130 GB RAM: 63-74 tok/s decode): experts in RAM, --moe-cache-mib ~80000 (63%),
+      # -lm none (126 GiB resident), -ub 2048, thinking off. Needs llama.cpp >= 2026-11-03: b12429 has deepseek41,
+      # draft-dspark and the DSML tool parser. The GGUF's own template (702 bytes) has no tools, so Summon serves the
+      # official chat_template.jinja (pinned), which llama.cpp detects as DeepSeek V4.1 (DSML tool calls).
+      # K/V per token: no simple formula (compressed + shared attention); 40 layers x 1 KV head x (512 K + 512 V) at f16
+      # plus the indexer keys is an upper bound, so the fit is conservative.
+      # Draft: unsloth's DSpark drafter (MIT, 8 GB). Measured on this build: code +30-45% (80-102 tok/s), prose same.
+      LC_TITLE="DeepSeek V4.1 Flash OBLITERATED" LC_ALIAS=deepseek-v4.1-flash-obliterated
+      LC_REPO=https://huggingface.co/HumanjavaEnterprises/DeepSeek-V4.1-Flash-1017-obliterated-upstream-GGUF/resolve/f80c4863ac39a6a7002b3a3675a7c46580f0038b
+      LC_FILE_PREFIX=DeepSeek-V4.1-Flash-1017-obliterated-hjimatrix
+      LC_QUANTS=("IQ2_XXS|248991528992|split")   # total of the parts below
+      LC_PARTS=(   # HF file list: "part|bytes|sha256"
+        "00001-of-00026|4960285408|4f030340ddbd5eb689d2d8015065834383a14c95c86a80220b1566dcfd41d986"
+        "00002-of-00026|4954522080|b621942d658eda514d360cf3a03df0bcd7c39e68c3f82060fa4a4ade799f375c"
+        "00003-of-00026|4954522080|3b5af260b998f562a7bd13fde6b901e63b8dfdbbdfdd15ebb8deae57d614315d"
+        "00004-of-00026|4954522080|061c1f2a67b5c5682680dd8151cf1c663b6c2472272923d9a34d3235775a2732"
+        "00005-of-00026|5131469280|36105ea495c97351cbc8dec1bfc229581eb2bb181a598d70f6a8913c6006c17b"
+        "00006-of-00026|5131469280|687e532f523869eb3dbedb37c899e2420a1536324b96ee7b2c9b78de27c2daf7"
+        "00007-of-00026|5662310880|3dc062fee6602dbc99b7ed02c90d7a1a2bbd58f3fcbf431012122da38a2aef22"
+        "00008-of-00026|5485363680|c60a2b04766dc5c85317b484645a1b2993df5647d7f283e9ad24170df39908f5"
+        "00009-of-00026|4954522080|c91b4aa790ce357cd76d44bd803807ff396293300f851b3c7346d16b5c19ac2d"
+        "00010-of-00026|5308416480|abca5fc169766ee966626817902aff2065ef4da6c4fef9455ce3e47125b7734a"
+        "00011-of-00026|5768479200|12d4819746441720b6b82116d77ea5ce9439c14eaced2eb816b35d5af67ff752"
+        "00012-of-00026|5945426400|1c845eba7ceed451dbe08dfe4f456a7c9fd01980a3d19cc71de446de5b043043"
+        "00013-of-00026|4954522080|510aa8b3d8f9a594e87a6390f5dbfde8d39fac7d9324263bd45147dd4d341a49"
+        "00014-of-00026|5662310880|26c0e6b7b7b83f121a95f4ed6f6ba6e8d3f8b73a4a6f0f83b55df55345534948"
+        "00015-of-00026|5803868640|25854cc0ef73a233ea975becd081d2445d0b997ee7ccb9e6e6c5bdd2456b9531"
+        "00016-of-00026|5980815840|3758c1879a87525a311bf14e4d3e06e853de1b9ca0af61b703dc6631c9a3b624"
+        "00017-of-00026|5945426400|334c998cde2674c2b2d55adaf6362cfa5319c1ba598addba1a5ee7d6a9f0ba66"
+        "00018-of-00026|5662310880|d3a4121b716a5ec66c3094aef8abb1e6189aa4183543e17038317142ddd212a9"
+        "00019-of-00026|5131469280|8e011c4d874d19279fbce29525e05590f3ede385438ed727a64205c7e727df5e"
+        "00020-of-00026|5662310880|2aa0c929a29ac80218c889e6fde0a0d80f11aa65222bf9f1a42540b1289ead48"
+        "00021-of-00026|6086984160|aaa4e67ea7154aae6901a4040ddcdb279e0ac54e55ba8e3f3e17f09ae9a16447"
+        "00022-of-00026|5768479200|f3d1c21bb0e9ef1d9fd84d70da42559664f6175a2cd66beba8d98b53b9557bb3"
+        "00023-of-00026|5803868640|d28409d20a52d9cc4d89d2ad8a7805417ece014bfaa9902c1b6e10859604961d"
+        "00024-of-00026|6405489120|17b1c028969b00d2ddb98fddd63f79c40d42619a68e8aaffc403095c0b93d1b6"
+        "00025-of-00026|110595290592|58acb958598ee8d1d35623750e720b4822e206a9352448c3114c1129813495e7"
+        "00026-of-00026|6317073472|7406e6a72c7e2e44a0c652d0106dcf6bfae0d3810c0151d0400d6d2666d320d2"
+      )
+      LC_EXPERT_PCT=53 LC_HOST_PCT=44
+      LC_TEMPLATE="DeepSeek-V4.1-Flash-1017.chat_template.jinja|95b7033a693b321ceaefb6f89ad07d1e0cf2b095305711f934a4ac649456739d|https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017/resolve/08c8657f02291e11b6f6b63e0e16014f8e748518/chat_template.jinja"
+      LC_KV_F16=$(( 40 * 1024 * 2 + 8 * 128 * 2 ))   # 83968 bytes/token (upper bound)
+      LC_TEMP=1.0 LC_TOP_P=1.0 LC_TOP_K="" LC_KWARGS='{"enable_thinking": false}'
+      LC_ARGS=(-lm none -ub 2048)
+      LC_DRAFT_KIND=dspark LC_DRAFT_KV_F16=$(( 3 * 1024 * 2 ))   # drafter cache: 3 blocks (estimate)
+      LC_DRAFT="dspark-DeepSeek-V4.1-Flash-1017-Q8_0.gguf|7976914240|6ba6ac1b331c540691a209e7fc97dec2a24e295acb1e755c84c7d24a4373927a|https://huggingface.co/unsloth/DeepSeek-V4.1-Flash-1017-GGUF/resolve/main"
+      LC_DRAFT_TITLE="DeepSeek's DSpark drafter" LC_DRAFT_GAIN="code +30-45%, prose about the same (measured on this build)"
+      LC_REF_Q=IQ2_XXS
+      LC_SPEED_NOTE="Measured by its makers on one 96 GB card: 63-74 tok/s decode, ~500-580 tok/s prefill."
+      ;;
     *) echo "Unknown llama.cpp model '$1' (use: ${LC_MODEL_IDS[*]})"; exit 1 ;;
   esac
   LC_ID=$1
@@ -235,6 +371,10 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
 # AA data behind the ranking (2026-11-16): Qwen3.8 27B LCR .82 II20 hall 29% (lowest) | Muse Glimmer LCR .83 (top)
 # II6 hall 84% | Qwen3.6 35B-A3B LCR .72 tau2 .95 (best tool calling) | Gemma 4 31B LCR .70 IFBench .76 tau2 .60 |
 # K2 Horizon 36B-A4B LCR .72, 512K | K2 Horizon 7B LCR .70.
+# OBLITERATUS (abliterated, uncensored) rows (2026-11-20), GGUFs by mradermacher: Llama 3.1 8B Lexi V2 (llama, 32 layers,
+# 8 KV heads x 128 -> 128 KB/token at f16, 128K) and Qwen3 4B structured-output stage A (qwen3, 36 layers, 8 KV heads
+# x 128 -> 144 KB/token). Not added: Mistral 7B v0.3 (a base model, no chat template), GLM-4 9B chat (its -hf
+# conversion lost the 128K RoPE scaling: GGUF trained context 4096), DeepSeek V4.1 Flash (smallest GGUF ~250 GB).
 # Descriptions: each model's own summary (ollama.com / Hugging Face page), shortened for the menu (2026-11-19).
 # "rank|Q8 ref|Q4 ref|KV KB/token|fixed MB|caps|name|description"   (rank "-" = community / HF model, opt-in)
 OL_MODELS=(
@@ -248,6 +388,8 @@ OL_MODELS=(
   "-|robit/qwen3.8-27b-e03-pi-adapted:q8_0||64|0|TVR|Qwen3.8 27B E03 pi (Q8)|Obliterated E03 + pi LoRA for the pi agent. Think off"
   "-|hf.co/bottlecapai/ThinkingCap-Qwen3.8-27B-GGUF:Q8_0|hf.co/bottlecapai/ThinkingCap-Qwen3.8-27B-GGUF:Q4_K_M|64|0|TVR|ThinkingCap Qwen3.8 27B|Qwen3.8 that thinks 37% less, -0.86 pts. PolyForm SB"
   "-|hf.co/ukisai/Swift-1.5-Qwen3.8-27B-GGUF:Q8_0|hf.co/ukisai/Swift-1.5-Qwen3.8-27B-GGUF:Q4_K_M|64|0|TVR|Swift 1.5 Qwen3.8 27B|Qwen3.8 with 25-54% less thinking. Swift licence <=\$1M"
+  "-|hf.co/mradermacher/Llama-3.1-8B-Lexi-Uncensored-V2-OBLITERATED-GGUF:Q8_0|hf.co/mradermacher/Llama-3.1-8B-Lexi-Uncensored-V2-OBLITERATED-GGUF:Q4_K_M|128|0|T--|Llama3.1 8B Lexi OBLITERATED|Uncensored Llama 3.1 8B (Lexi V2, abliterated). Older, small"
+  "-|hf.co/mradermacher/qwen3-4b-structured-output-merged-stage-a-OBLITERATED-GGUF:Q8_0|hf.co/mradermacher/qwen3-4b-structured-output-merged-stage-a-OBLITERATED-GGUF:Q4_K_M|144|0|T-R|Qwen3 4B JSON OBLITERATED|Uncensored Qwen3 4B tuned for JSON output (stage-A checkpoint)"
 )
 # Hugging Face GGUF refs have no Ollama registry manifest: exact sizes in MiB from the HF file list (2026-11-17).
 declare -A HF_MB=(
@@ -255,6 +397,10 @@ declare -A HF_MB=(
   ["hf.co/bottlecapai/ThinkingCap-Qwen3.8-27B-GGUF:Q4_K_M"]=16634
   ["hf.co/ukisai/Swift-1.5-Qwen3.8-27B-GGUF:Q8_0"]=27701
   ["hf.co/ukisai/Swift-1.5-Qwen3.8-27B-GGUF:Q4_K_M"]=16634
+  ["hf.co/mradermacher/Llama-3.1-8B-Lexi-Uncensored-V2-OBLITERATED-GGUF:Q8_0"]=8145
+  ["hf.co/mradermacher/Llama-3.1-8B-Lexi-Uncensored-V2-OBLITERATED-GGUF:Q4_K_M"]=4692
+  ["hf.co/mradermacher/qwen3-4b-structured-output-merged-stage-a-OBLITERATED-GGUF:Q8_0"]=4082
+  ["hf.co/mradermacher/qwen3-4b-structured-output-merged-stage-a-OBLITERATED-GGUF:Q4_K_M"]=2381
 )
 OL_CTX_MAX=131072 OL_CTX_MIN=65536
 OL_OVERHEAD_MB=1536                            # CUDA context + compute buffers
@@ -439,7 +585,7 @@ while (( $# )); do
     --version) echo "summon $SUMMON_VERSION"; exit 0 ;;
     -h|--help) sed -n '2,/^set -e/p' "$0" | sed -e '/^set -e/d' -e 's/^# \{0,1\}//'; exit 0 ;;
     -y) YES=1 ;;
-    nanbeige|qwen38pi|ornith35b|ornith9b|thinkingcap|ollama|llamacpp|llama.cpp) TARGET=$1 ;;
+    nanbeige|qwen38pi|ornith35b|ornith9b|thinkingcap|qwen38obl|ornith9bobl|feyospace|deepseek41obl|ollama|llamacpp|llama.cpp) TARGET=$1 ;;
     -*) echo "Unknown option: $1"; exit 1 ;;
     *) [ -z "$PORT" ] || { echo "Only one port argument is accepted: '$1'"; exit 1; }; PORT=$1 ;;
   esac
@@ -461,7 +607,7 @@ fi
 
 # --- Uninstall: one engine by name, or both (a llama.cpp model name means the whole llama.cpp engine) ---
 if [ "$ACTION" = uninstall ]; then
-  case "$TARGET" in nanbeige|qwen38pi|ornith35b|ornith9b|thinkingcap|llama.cpp) TARGET=llamacpp ;; esac
+  case "$TARGET" in nanbeige|qwen38pi|ornith35b|ornith9b|thinkingcap|qwen38obl|ornith9bobl|feyospace|deepseek41obl|llama.cpp) TARGET=llamacpp ;; esac
   DIRS=()
   if [ "$TARGET" != ollama ]; then for d in "${LC_DIRS[@]}"; do [ -d "$d" ] && DIRS+=("$d"); done; fi
   if [ "$TARGET" != llamacpp ]; then
@@ -501,11 +647,16 @@ fi
 # ======================================================================================================
 # llama.cpp sizing helpers (used by the first menu and the llama.cpp engine)
 # ======================================================================================================
-nb_need_mb() { echo $(( ($1 + LC_EXTRA_BYTES) / 1048576 + $2 * $3 / 1048576 )); }   # weight bytes, ctx, kv bytes/token -> MB (+ LoRA)
+lc_file() {   # $1 = quant -> the file llama-server opens (a split GGUF's first part)
+  if (( ${#LC_PARTS[@]} )); then echo "$LC_FILE_PREFIX$LC_FILE_SEP$1-${LC_PARTS[0]%%|*}.gguf"
+  else echo "$LC_FILE_PREFIX$LC_FILE_SEP$1.gguf"; fi
+}
+# weight bytes, ctx, kv bytes/token -> GPU MB (+ LoRA/draft), without the host-only share (LC_HOST_PCT)
+nb_need_mb() { echo $(( ($1 * (100 - LC_HOST_PCT) / 100 + LC_EXTRA_BYTES) / 1048576 + $2 * $3 / 1048576 )); }
 kv_bytes() { if [ "${1%+ram}" = f16 ]; then echo "$LC_KV_F16"; else echo "$LC_KV_Q8"; fi; }   # "q8_0+ram" -> q8_0
 MOE_MIN_CACHE_PCT=60                           # the GPU expert cache must hold >= 60% of the experts (few RAM reads)
 ram_gpu_mb() {   # MoE with experts in RAM: GPU MB for the non-expert weights + extras + cache (no expert cache)
-  echo $(( $1 * (100 - LC_EXPERT_PCT) / 100 / 1048576 + LC_EXTRA_BYTES / 1048576 + $2 * $(kv_bytes "$3") / 1048576 ))
+  echo $(( $1 * (100 - LC_EXPERT_PCT - LC_HOST_PCT) / 100 / 1048576 + LC_EXTRA_BYTES / 1048576 + $2 * $(kv_bytes "$3") / 1048576 ))
 }
 vram_text() {   # $1 weight bytes, $2 ctx, $3 cache type -> "~44G" or, experts in RAM, "~23G+18G RAM"
   if [[ $3 == *+ram ]]; then echo "~$(( (LC_BUDGET_MB + LC_OVERHEAD_MB) / 1024 ))G VRAM + $(( $1 * LC_EXPERT_PCT / 100 / 1073741824 ))G RAM"
@@ -657,9 +808,10 @@ banner
 access_mode
 (( DRY_RUN )) && echo "DRY RUN: the full wizard, then the plan. Nothing is installed, downloaded or started."
 if (( DRY_RUN )) && [ -n "${SUMMON_GPU:-}" ]; then
-  # Preview another card: "NAME:TOTAL_MB" (free VRAM = total - 500 MB, like an idle card)
-  GPU_INFO="${SUMMON_GPU%%:*}, ${SUMMON_GPU##*:}, $(( ${SUMMON_GPU##*:} - 500 ))"
-  [[ ${SUMMON_GPU##*:} =~ ^[0-9]+$ ]] || { echo "SUMMON_GPU must look like \"RTX 3090:24576\" (name:MB)"; exit 1; }
+  # Preview another machine: "NAME:TOTAL_MB" or "NAME:TOTAL_MB:CARDS" (free VRAM = total - 500 MB, like an idle card)
+  IFS=: read -r g_name g_mb g_n <<< "$SUMMON_GPU"; g_n=${g_n:-1}
+  [[ $g_mb =~ ^[0-9]+$ && $g_n =~ ^[1-9][0-9]*$ ]] || { echo "SUMMON_GPU must look like \"RTX 3090:24576\" (name:MB[:cards])"; exit 1; }
+  GPU_INFO=$(for ((k = 0; k < g_n; k++)); do echo "$g_name, $g_mb, $(( g_mb - 500 ))"; done)
 else
   command -v nvidia-smi >/dev/null || { echo "nvidia-smi not found - no NVIDIA GPU/driver? (Preview: SUMMON_GPU=\"RTX 3090:24576\" $0 --dry-run)"; exit 1; }
   GPU_INFO=$(nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader,nounits)
@@ -693,7 +845,7 @@ HAS_WHIPTAIL=0; command -v whiptail >/dev/null && HAS_WHIPTAIL=1
 case "${ENGINE:-}" in llamacpp|llama.cpp) ENGINE=nanbeige ;; esac
 if [ -z "${ENGINE:-}" ] && { [ -n "${ONLY:-}" ] || [ -n "${FAST:-}" ]; }; then ENGINE=ollama; fi
 case "${ENGINE:-}" in
-  nanbeige|qwen38pi|ornith35b|ornith9b|thinkingcap|ollama|"") ;;
+  nanbeige|qwen38pi|ornith35b|ornith9b|thinkingcap|qwen38obl|ornith9bobl|feyospace|deepseek41obl|ollama|"") ;;
   *) echo "ENGINE must be one of: ${LC_MODEL_IDS[*]} ollama (got '$ENGINE')"; exit 1 ;;
 esac
 OL_PICK=""
@@ -701,7 +853,7 @@ if [ -z "${ENGINE:-}" ] || [ "$ENGINE" = ollama ]; then ol_prepare; fi
 if [ -z "${ENGINE:-}" ] || { [ "$ENGINE" = ollama ] && [ -z "${ONLY:-}" ]; }; then
   # Spaced layout: an engine header per group and a gap between the groups (header rows can't be picked). Short
   # terminals get the compact list instead, so everything stays on one screen; descriptions are cut to the width.
-  DEF_ENGINE="" LC_ITEMS=() OL_ITEMS=() ITEMS=()
+  DEF_ENGINE="" LC_ITEMS=() OL_ITEMS=() ITEMS=() LC_HIDDEN=() OL_HIDDEN=()
   MENU_COLS=$(( $(tput cols 2>/dev/null || echo 124) - 4 )); (( MENU_COLS > 150 )) && MENU_COLS=150
   MENU_LINES=$(tput lines 2>/dev/null || echo 34)
   DESC_W=$(( MENU_COLS - 12 - 28 - 2 - 17 - 2 )); (( DESC_W < 12 )) && DESC_W=12   # borders/indent + name + fit
@@ -722,25 +874,31 @@ if [ -z "${ENGINE:-}" ] || { [ "$ENGINE" = ollama ] && [ -z "${ONLY:-}" ]; }; th
     fi
     # Pre-select only models that run fully on the GPU (experts in RAM work, but are slower and unmeasured)
     [ -z "$DEF_ENGINE" ] && [ "$c" = 131072 ] && [ -n "$q" ] && [[ $kv != *+ram ]] && DEF_ENGINE=$id
-    if [ -n "$q" ]; then
-      if [[ $kv == *+ram ]]; then fit="$q +RAM@$((c/1024))K"
-      else fit="$q ~$(( ($(nb_need_mb "$b" "$c" "$(kv_bytes "$kv")") + LC_OVERHEAD_MB) / 1024 ))G@$((c/1024))K"; fi
-    else
-      lc_smallest=${LC_QUANTS[${#LC_QUANTS[@]}-1]}
-      fit="TOO BIG ~$(( ($(nb_need_mb "$(echo "$lc_smallest" | cut -d'|' -f2)" 32768 "$LC_KV_Q8") + LC_OVERHEAD_MB) / 1024 ))G@32K"
-    fi
+    [ -n "$q" ] || { LC_HIDDEN+=("$LC_TITLE"); continue; }   # doesn't fit this machine: not offered
+    if [[ $kv == *+ram ]]; then fit="$q +RAM@$((c/1024))K"
+    else fit="$q ~$(( ($(nb_need_mb "$b" "$c" "$(kv_bytes "$kv")") + LC_OVERHEAD_MB) / 1024 ))G@$((c/1024))K"; fi
     case "$id" in   # the model's own summary (model card), shortened
       nanbeige) blurb="Lightweight agent for coding and research. AA index 20" ;;
       qwen38pi) blurb="Qwen3.8 + RL-tuned LoRA for the pi agent. No thinking" ;;
       ornith35b) blurb="Self-improving MoE for coding agents. 3B active, fast" ;;
       ornith9b) blurb="Self-improving 9B: light, fast, 256K on 24 GB cards" ;;
       thinkingcap) blurb="Qwen3.8 that thinks 37% less, MTP on. PolyForm SB" ;;
+      qwen38obl) blurb="Uncensored Qwen3.8 (abliterated V3), MMLU -2.1pp. No thinking" ;;
+      ornith9bobl) blurb="Uncensored Ornith 9B (abliterated), MMLU -4pp. No thinking" ;;
+      feyospace) blurb="Uncensored cybersecurity 27B for pentests and CTFs" ;;
+      deepseek41obl) blurb="Uncensored 748B MoE, MMLU 83.6%. Experts in RAM (~126 GB)" ;;
     esac
     LC_ITEMS+=("$id" "$(row "$LC_TITLE" "$fit" "$blurb")")
   done
   DRAFT=$DRAFT_USER
-  for i in "${!RANKS[@]}"; do OL_ITEMS+=("ol:$((i+1))" "$(row "${MNAME[i]}" "$(fit_label $i)" "${NOTE[i]}")"); done
-  if (( MENU_LINES >= ${#LC_ITEMS[@]}/2 + ${#OL_ITEMS[@]}/2 + 3 + 11 )); then
+  for i in "${!RANKS[@]}"; do
+    if (( MCTX[i] == 0 )); then OL_HIDDEN+=("${MNAME[i]}"); continue; fi   # too big even at 64K: not offered
+    OL_ITEMS+=("ol:$((i+1))" "$(row "${MNAME[i]}" "$(fit_label $i)" "${NOTE[i]}")")
+  done
+  if (( ${#LC_ITEMS[@]} + ${#OL_ITEMS[@]} == 0 )); then
+    echo "No model fits this machine ($((FREE_MB/1024)) GB VRAM, $((AVAIL_RAM_MB/1024)) GB free RAM)."; exit 1
+  fi
+  if (( ${#LC_ITEMS[@]} && ${#OL_ITEMS[@]} )) && (( MENU_LINES >= ${#LC_ITEMS[@]}/2 + ${#OL_ITEMS[@]}/2 + 3 + 11 )); then
     # (labels must not start with "-": whiptail would read them as options)
     ITEMS=(_h1 "== llama.cpp  .  tuned per model, verified downloads ================================="
            "${LC_ITEMS[@]}" _gap " "
@@ -750,8 +908,11 @@ if [ -z "${ENGINE:-}" ] || { [ "$ENGINE" = ollama ] && [ -z "${ONLY:-}" ]; }; th
     ITEMS=("${LC_ITEMS[@]}" "${OL_ITEMS[@]}")
   fi
   (( REC >= 0 )) && [ -z "$DEF_ENGINE" ] && DEF_ENGINE="ol:$((REC+1))"
-  [ "$ENGINE" = ollama ] && DEF_ENGINE="ol:$((REC >= 0 ? REC+1 : 1))"
-  DEF_ENGINE=${DEF_ENGINE:-nanbeige}
+  [ "$ENGINE" = ollama ] && (( ${#OL_ITEMS[@]} )) && DEF_ENGINE=$( (( REC >= 0 )) && echo "ol:$((REC+1))" || echo "${OL_ITEMS[0]}")
+  DEF_ENGINE=${DEF_ENGINE:-${ITEMS[0]}}
+  [[ $DEF_ENGINE == _* ]] && DEF_ENGINE=${LC_ITEMS[0]:-${OL_ITEMS[0]}}
+  HIDDEN=("${LC_HIDDEN[@]}" "${OL_HIDDEN[@]}")
+  (( ${#HIDDEN[@]} )) && echo "Not offered (too big for this machine): $(IFS=,; echo "${HIDDEN[*]}" | sed 's/,/, /g')"
   if [ -n "${CTX:-}" ] || [ -n "${QUANT:-}" ] || (( ! INTERACTIVE )); then PICKED=$DEF_ENGINE
   else
     PICKED=_h1
@@ -955,7 +1116,7 @@ install_llamacpp() {
     for c in "${LC_CTX_TIERS[@]}"; do [ -n "$(best_quant "$c")" ] && { DEF_CTX=$c; break; }; done
   fi
   if [ -z "$DEF_CTX" ] && [ -z "${CTX:-}" ]; then
-    echo "$LC_TITLE doesn't fit in $((FREE_MB/1024)) GB of VRAM${QUANT:+ with QUANT=$QUANT} at 32K or more."
+    echo "$LC_TITLE doesn't fit in $((FREE_MB/1024)) GB of VRAM$( (( LC_EXPERT_PCT )) && echo " + $((AVAIL_RAM_MB/1024)) GB free RAM")${QUANT:+ with QUANT=$QUANT} at 32K or more."
     echo "Try a smaller model (./summon.sh ornith9b) or Ollama (./summon.sh ollama)."
     exit 1
   fi
@@ -1013,15 +1174,15 @@ install_llamacpp() {
     MOE_CACHE_MB=$(( LC_BUDGET_MB - $(ram_gpu_mb "$BYTES" "$CTX_SEL" "$KV_SEL") ))
     (( MOE_CACHE_MB > BYTES * LC_EXPERT_PCT / 100 / 1048576 )) && MOE_CACHE_MB=$(( BYTES * LC_EXPERT_PCT / 100 / 1048576 ))
   fi
-  echo "Plan: $QUANT_SEL weights ($((BYTES/1073741824)) GB) + $KV_TYPE_SEL K/V at $((CTX_SEL/1024))K context = $(vram_text "$BYTES" "$CTX_SEL" "$KV_SEL")$( (( EXPERTS_RAM )) || echo " of $((FREE_MB/1024)) GB")"
+  echo "Plan: $QUANT_SEL weights ($((BYTES/1073741824)) GB$( (( LC_HOST_PCT )) && echo ", $(( BYTES * LC_HOST_PCT / 100 / 1073741824 )) GB of it read from disk")) + $KV_TYPE_SEL K/V at $((CTX_SEL/1024))K context = $(vram_text "$BYTES" "$CTX_SEL" "$KV_SEL")$( (( EXPERTS_RAM )) || echo " of $((FREE_MB/1024)) GB")"
   (( EXPERTS_RAM )) && echo "      MoE experts in system RAM ($(( BYTES * LC_EXPERT_PCT / 100 / 1073741824 )) GB of $((AVAIL_RAM_MB/1024)) GB free); $(( MOE_CACHE_MB * 100 / (BYTES * LC_EXPERT_PCT / 100 / 1048576) ))% of them cached on the GPU ($((MOE_CACHE_MB/1024)) GB)"
   (( LC_DRAFT_ON )) && echo "      Draft: $LC_DRAFT_TITLE ($LC_DRAFT_GAIN)"
   if (( DRY_RUN )); then
     echo
     echo "Would do (dry run, nothing done):"
     echo "  1. Install what's missing: curl, Docker, NVIDIA container toolkit"
-    echo "  2. Download $LC_FILE_PREFIX-$QUANT_SEL.gguf ($((BYTES/1073741824)) GB), check size + GGUF header (sha256 with --verify)"
-    echo "     from ${LC_REPO%/resolve/main}"
+    echo "  2. Download $(lc_file "$QUANT_SEL")$( (( ${#LC_PARTS[@]} > 1 )) && echo " + $(( ${#LC_PARTS[@]} - 1 )) more parts") ($((BYTES/1073741824)) GB), check size + GGUF header (sha256 with --verify)"
+    echo "     from ${LC_REPO%/resolve/*}"
     if [ -n "$LC_LORA" ]; then
       echo "     + LoRA adapter ${LC_LORA%%|*} ($(( $(echo "$LC_LORA" | cut -d'|' -f2) / 1048576 )) MB) from $(echo "$LC_LORA" | cut -d'|' -f4 | sed 's#/resolve/main##')"
     fi
@@ -1031,8 +1192,10 @@ install_llamacpp() {
     fi
     echo "  3. Pull $LC_IMAGE"
     echo "  4. Start llama-server: $LC_TITLE $QUANT_SEL, -c $CTX_SEL, $KV_TYPE_SEL cache, $( (( EXPERTS_RAM )) && echo "experts in RAM + ${MOE_CACHE_MB} MB GPU expert cache" || echo "all layers on the GPU"),"
-    echo "     temp ${TEMPERATURE} / top_p ${TOP_P}${TOP_K:+ / top_k $TOP_K}, speculation: $( [ "${SPEC:-}" = off ] && echo off || { (( LC_DRAFT_ON )) && echo "$LC_DRAFT_KIND draft + n-gram" || echo n-gram; }), host-RAM prompt cache"
+    echo "     temp ${TEMPERATURE} / top_p ${TOP_P}${TOP_K:+ / top_k $TOP_K}, speculation: $( [ "${SPEC:-}" = off ] && echo off || { (( LC_DRAFT_ON )) && echo "$LC_DRAFT_KIND draft$( [ "$LC_DRAFT_KIND" = dspark ] || echo " + n-gram")" || echo n-gram; }), host-RAM prompt cache"
     [ -n "$LC_KWARGS" ] && echo "     chat template: $LC_KWARGS"
+    [ -n "$LC_TEMPLATE" ] && echo "     chat template file: ${LC_TEMPLATE##*|} (sha256-checked; replaces the GGUF's own)"
+    (( ${#LC_ARGS[@]} )) && echo "     extra: ${LC_ARGS[*]}"
     echo "  5. Access: $(access_text)"
     echo "  6. Wait for /health, then test a tool call. Metrics at /metrics (Prometheus format)"
     echo
@@ -1079,13 +1242,38 @@ install_llamacpp() {
   echo "Docker OK: $(docker --version). Data folder: $DDIR"
 
   # --- Model download(s): the weights, plus the LoRA adapter if the model has one ---
-  local FILE="$LC_FILE_PREFIX-$QUANT_SEL.gguf" LORA_FILE="" LORA_BYTES LORA_SHA LORA_REPO DRAFT_FILE="" DRAFT_SRC=""
+  local FILE LORA_FILE="" LORA_BYTES LORA_SHA LORA_REPO DRAFT_FILE="" DRAFT_SRC="" PART_FILES=() p pf pb ps need=0 free
+  FILE=$(lc_file "$QUANT_SEL")
   mkdir -p "$DDIR/models"
   docker pull -q "$LC_IMAGE" >/dev/null 2>&1 & local PULL_PID=$!   # pull the ~3 GB image during the download
-  fetch_gguf "$LC_REPO" "$FILE" "$BYTES" "$SHA"
+  if (( ${#LC_PARTS[@]} )); then   # split GGUF: every file, each verified; llama.cpp opens the first and finds the rest
+    for p in "${LC_PARTS[@]}"; do
+      IFS='|' read -r pf pb ps <<< "$p"; pf="$LC_FILE_PREFIX$LC_FILE_SEP$QUANT_SEL-$pf.gguf"; PART_FILES+=("$pf")
+      [ -f "$DDIR/models/$pf" ] || need=$(( need + pb - $(stat -c %s "$DDIR/models/$pf.part" 2>/dev/null || echo 0) ))
+    done
+    free=$(df -Pm "$DDIR/models" | awk 'NR==2 {print $4}')
+    if [ -n "$free" ] && (( free < need / 1048576 + 1024 )); then
+      echo "Not enough disk: $LC_TITLE needs ~$(( need / 1073741824 + 1 )) GB more in $DDIR/models, $((free/1024)) GB free."; exit 1
+    fi
+    for p in "${LC_PARTS[@]}"; do
+      IFS='|' read -r pf pb ps <<< "$p"
+      fetch_gguf "$LC_REPO" "$LC_FILE_PREFIX$LC_FILE_SEP$QUANT_SEL-$pf.gguf" "$pb" "$ps"
+    done
+  else
+    fetch_gguf "$LC_REPO" "$FILE" "$BYTES" "$SHA"
+  fi
   if [ -n "$LC_LORA" ]; then
     IFS='|' read -r LORA_FILE LORA_BYTES LORA_SHA LORA_REPO <<< "$LC_LORA"
     fetch_gguf "$LORA_REPO" "$LORA_FILE" "$LORA_BYTES" "$LORA_SHA"
+  fi
+  local TPL_FILE="" TPL_SHA TPL_URL
+  if [ -n "$LC_TEMPLATE" ]; then   # a few KB: always hash-checked
+    IFS='|' read -r TPL_FILE TPL_SHA TPL_URL <<< "$LC_TEMPLATE"
+    if ! echo "$TPL_SHA  $DDIR/models/$TPL_FILE" | sha256sum -c --status 2>/dev/null; then
+      curl -fsSL --retry 3 --connect-timeout 20 -o "$DDIR/models/$TPL_FILE" "$TPL_URL" \
+        && echo "$TPL_SHA  $DDIR/models/$TPL_FILE" | sha256sum -c --status \
+        || { rm -f "$DDIR/models/$TPL_FILE"; echo "Chat template download failed or its sha256 changed: $TPL_URL"; exit 1; }
+    fi
   fi
   if (( LC_DRAFT_ON )) && [ -n "$LC_DRAFT" ]; then
     local D_FILE D_BYTES D_SHA D_REPO
@@ -1095,7 +1283,7 @@ install_llamacpp() {
     if (( LC_DRAFT_PAD )); then DRAFT_FILE="${D_FILE%.gguf}.pad.gguf"; pad_draft "$FILE" "$D_FILE" "$D_SHA" "$DRAFT_FILE"; fi
   fi
   local OTHERS
-  OTHERS=$(ls "$DDIR/models" | grep -vxF -e "$FILE" -e "${LORA_FILE:-//}" -e "${DRAFT_SRC:-//}" -e "${DRAFT_FILE:-//}" || true)
+  OTHERS=$(ls "$DDIR/models" | grep -vxF -e "$FILE" "${PART_FILES[@]/#/-e}" -e "${LORA_FILE:-//}" -e "${TPL_FILE:-//}" -e "${DRAFT_SRC:-//}" -e "${DRAFT_FILE:-//}" || true)
   [ -n "$OTHERS" ] && echo "Other model files in $DDIR/models (kept, switching back is instant): $OTHERS"
 
   # --- Start (or replace) the server ---
@@ -1104,9 +1292,10 @@ install_llamacpp() {
   apply_access docker   # before the port opens
   # Prompt cache in host RAM: with one slot, a side request (chat title, subagent) overwrites the main
   # conversation's K/V. llama-server parks the old state in RAM first, but its default 8 GiB cap holds only ~75K
-  # tokens of this model. Give it half the available host RAM.
+  # tokens of this model. Give it half the available host RAM (minus the MoE experts that will live there).
   local AVAIL_MB CACHE_RAM_MB SERVER_ARGS
   AVAIL_MB=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
+  (( EXPERTS_RAM )) && AVAIL_MB=$(( AVAIL_MB - BYTES * LC_EXPERT_PCT / 100 / 1048576 ))
   CACHE_RAM_MB=$(( AVAIL_MB / 2 )); (( CACHE_RAM_MB < 8192 )) && CACHE_RAM_MB=8192
   # --metrics: Prometheus-format stats at /metrics (tokens/s, prompt and decode counts, draft acceptance, KV use).
   # Same port and access rules as the API: local mode / your IP only.
@@ -1115,6 +1304,8 @@ install_llamacpp() {
   if [ -n "$TOP_K" ]; then SERVER_ARGS+=(--top-k "$TOP_K"); fi
   if [ -n "$LC_KWARGS" ]; then SERVER_ARGS+=(--chat-template-kwargs "$LC_KWARGS"); fi
   if [ -n "$LORA_FILE" ]; then SERVER_ARGS+=(--lora "/models/$LORA_FILE"); fi
+  if [ -n "$TPL_FILE" ]; then SERVER_ARGS+=(--chat-template-file "/models/$TPL_FILE"); fi
+  SERVER_ARGS+=("${LC_ARGS[@]}")
   # Speculative decoding: the model's draft (MTP head or a small draft model) plus n-gram drafts from text already
   # in the context. The model verifies every drafted token: quality holds on average, but outputs aren't
   # bit-identical (batched verification changes float rounding). SPEC=off turns all of it off.
@@ -1126,6 +1317,9 @@ install_llamacpp() {
                SERVER_ARGS+=(-md "/models/$DRAFT_FILE" --spec-draft-ngl all --spec-draft-n-max "${LC_DRAFT_NMAX:-4}" --spec-draft-p-min 0.6) ;;
         mtp)   SPEC_TYPES=draft-mtp,ngram-mod; SERVER_ARGS+=(-md "/models/$DRAFT_FILE" --spec-draft-n-max "${LC_DRAFT_NMAX:-2}") ;;
         mtp-inline) SPEC_TYPES=draft-mtp,ngram-mod; SERVER_ARGS+=(--spec-draft-n-max "${LC_DRAFT_NMAX:-2}") ;;
+        # DSpark: n-gram drafts added nothing on top of it in its makers' tests, and 3 drafted tokens were slower than 2
+        dspark) SPEC_TYPES=draft-dspark
+                SERVER_ARGS+=(-md "/models/$DRAFT_FILE" --spec-draft-ngl all --spec-draft-n-max "${LC_DRAFT_NMAX:-2}") ;;
       esac
       SERVER_ARGS+=(-ctkd "$KV_TYPE_SEL" -ctvd "$KV_TYPE_SEL")
     fi

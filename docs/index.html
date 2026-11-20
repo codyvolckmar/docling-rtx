@@ -99,6 +99,10 @@
     <tr><td><b>Ornith 1.5 35B</b></td><td>llama.cpp</td><td>Fast MoE, ~3B active per token. Vendor benchmarks only.</td><td>128K, experts in RAM</td><td>256K with 8-bit weights</td></tr>
     <tr><td><b>Ornith 1.5 9B</b></td><td>llama.cpp</td><td>Fast and light. Vendor benchmarks only.</td><td>256K with 8-bit weights</td><td>256K with 8-bit weights</td></tr>
     <tr><td><b>ThinkingCap Qwen3.8 27B</b></td><td>llama.cpp</td><td>Qwen3.8 27B that thinks ~37% less, with its built-in MTP head for faster decoding. PolyForm Small Business licence.</td><td>128K (IQ4_XS)</td><td>128K with 8-bit weights</td></tr>
+    <tr><td><b>Qwen3.8 27B OBLITERATED</b></td><td>llama.cpp</td><td>Uncensored Qwen3.8 (OBLITERATUS abliteration, vendor MMLU -2.1pp). Thinking off; served with Qwen3.8's own template so tool calls work.</td><td>128K (Q4_K_M)</td><td>256K with 8-bit weights</td></tr>
+    <tr><td><b>Ornith 1.5 9B OBLITERATED</b></td><td>llama.cpp</td><td>Uncensored Ornith 9B (vendor MMLU -4pp). Thinking off.</td><td>256K with 8-bit weights</td><td>256K with 8-bit weights</td></tr>
+    <tr><td><b>feyospace-s1 OBLITERATED</b></td><td>llama.cpp</td><td>Uncensored ~28B tuned for cybersecurity: pentests, CTFs, vulnerability research. Run its tools in a sandbox.</td><td>128K (Q4_K_M)</td><td>256K with 8-bit weights</td></tr>
+    <tr><td><b>DeepSeek V4.1 Flash OBLITERATED</b></td><td>llama.cpp</td><td>Uncensored 748B MoE (refusals reduced, not removed; MMLU 83.6%). 237 GB download. Needs a 96 GB card + ~130 GB free RAM, or ~160 GB of VRAM across cards.</td><td>not offered</td><td>not offered</td></tr>
     <tr><td><b>Ollama models</b></td><td>Ollama</td><td>Qwen3.8 27B, Qwen3.6 35B-A3B, Gemma 4 31B, K2 Horizon, Muse Glimmer…</td><td>Qwen3.8 27B at 64K</td><td>most at 128K, 8-bit</td></tr>
   </table>
   <p class="note">All of them are in one menu, sized live to your card. Every model serves an OpenAI-compatible API: point any client (pi, Continue, Open WebUI, your own code) at
