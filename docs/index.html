@@ -111,8 +111,10 @@
 
 <section id="shots">
   <h2><span>04</span> See it first</h2>
-  <p class="note">Real screens from <code>./summon.sh --dry-run</code>: the actual script and whiptail menus, nothing installed.</p>
+  <p class="note">First, a real install on an NVIDIA L40. After that, real screens from <code>./summon.sh --dry-run</code>: the actual script and whiptail menus, nothing installed.</p>
   <div class="shots">
+    <figure><a href="img/12-l40-thinkingcap-install.png"><img src="img/12-l40-thinkingcap-install.png" alt="Summon installing and serving ThinkingCap on an NVIDIA L40" loading="lazy"></a><figcaption>Real run on an NVIDIA L40 (48 GB): one line installs ThinkingCap 27B at Q8_0 with 128K context and passes the tool-call test.</figcaption></figure>
+    <figure><a href="img/13-l40-thinkingcap-speed.png"><img src="img/13-l40-thinkingcap-speed.png" alt="llama-server timings with MTP speculative decoding" loading="lazy"></a><figcaption>Same run: ~42 tok/s decode on a 35K-token prompt with MTP drafts (49% accepted), 56.6 tok/s on a short one (82%).</figcaption></figure>
     <figure><a href="img/01-model-menu-a6000.png"><img src="img/01-model-menu-a6000.png" alt="Summon model menu on an RTX A6000" loading="lazy"></a><figcaption>One menu, every model: llama.cpp and Ollama side by side, sized to a 48 GB card. Nanbeige pre-selected.</figcaption></figure>
     <figure><a href="img/06-model-menu-3090.png"><img src="img/06-model-menu-3090.png" alt="Summon model menu on an RTX 3090" loading="lazy"></a><figcaption>The same list on a 24 GB card: re-sized, too-big models flagged, Ornith 9B pre-selected.</figcaption></figure>
     <figure><a href="img/03-context-menu.png"><img src="img/03-context-menu.png" alt="Context window menu" loading="lazy"></a><figcaption>Step 1: context window, with the best weights that fit at each length.</figcaption></figure>
@@ -142,7 +144,7 @@
     <div class="card"><h3>Linux</h3><p>Ubuntu or Debian (apt), NVIDIA driver installed, root or sudo. Summon installs Docker and the NVIDIA container toolkit if missing.</p></div>
     <div class="card"><h3>Windows</h3><p>Windows 10 21H2+ or 11 with a current NVIDIA driver. The PowerShell installer sets up WSL 2 + Ubuntu and runs Summon there.</p></div>
   </div>
-  <p class="warn">Honest notes: Summon is young. Its Nanbeige llama.cpp setup has served real agent work on rented RTX A6000 pods;
+  <p class="warn">Honest notes: Summon is young. Its Nanbeige llama.cpp setup has served real agent work on rented RTX A6000 pods, and ThinkingCap 27B ran end to end on an L40 (~42 tok/s, tool calls OK);
     the full wizard, the Windows/WSL path and the Ornith models have only been tested with dry runs and simulated GPUs so far. Ornith's benchmarks are the vendor's own. Downloads are 2–38 GB (DeepSeek V4.1 Flash: 237 GB).
     Piping a script into your shell gives it root: read it first if that matters to you (it should).</p>
 </section>
