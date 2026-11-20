@@ -84,4 +84,4 @@ Running these by hand is easy to get subtly wrong. Here's what Summon handles.
 
 > **Cody Volckmar** · [cody.volckmar@gmail.com](mailto:cody.volckmar@gmail.com) · X: [x.com/Chillisock7](https://x.com/Chillisock7)
 >
-> Questions about running these models with Summon? Email me, or open a [GitHub issue](https://github.com/codyvolckmar/summon/issues).
+> Summon is a free, open-source side project, not a service. Questions, bugs and ideas: [GitHub issues](https://github.com/codyvolckmar/summon/issues). Want to build on it together? Say hi by email or on X.

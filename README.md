@@ -107,4 +107,4 @@ Models belong to their creators and carry their own licences: Nanbeige (Apache-2
 
 > **Cody Volckmar** · [cody.volckmar@gmail.com](mailto:cody.volckmar@gmail.com) · X: [x.com/Chillisock7](https://x.com/Chillisock7)
 >
-> Questions, ideas, or want Summon on your hardware? Email me. Bugs and feature requests: [GitHub issues](https://github.com/codyvolckmar/summon/issues).
+> Summon is a free, open-source side project, not a service. Questions, bugs and ideas: [GitHub issues](https://github.com/codyvolckmar/summon/issues). Want to build on it together? Say hi by email or on X.
