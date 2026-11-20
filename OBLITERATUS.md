@@ -82,6 +82,6 @@ Running these by hand is easy to get subtly wrong. Here's what Summon handles.
 
 ## Questions?
 
-> **Cody Volckmar** · [cody.volckmar@gmail.com](mailto:cody.volckmar@gmail.com)
+> **Cody Volckmar** · [cody.volckmar@gmail.com](mailto:cody.volckmar@gmail.com) · X: [x.com/Chillisock7](https://x.com/Chillisock7)
 >
 > Questions about running these models with Summon? Email me, or open a [GitHub issue](https://github.com/codyvolckmar/summon/issues).

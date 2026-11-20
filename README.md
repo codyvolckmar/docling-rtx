@@ -90,6 +90,6 @@ Models belong to their creators and carry their own licences: Nanbeige (Apache-2
 
 ## Questions?
 
-> **Cody Volckmar** · [cody.volckmar@gmail.com](mailto:cody.volckmar@gmail.com)
+> **Cody Volckmar** · [cody.volckmar@gmail.com](mailto:cody.volckmar@gmail.com) · X: [x.com/Chillisock7](https://x.com/Chillisock7)
 >
 > Questions, ideas, or want Summon on your hardware? Email me. Bugs and feature requests: [GitHub issues](https://github.com/codyvolckmar/summon/issues).
