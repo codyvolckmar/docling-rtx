@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Summon installer for Linux - AI, Open-source, Private Intelligence.
+# Summon installer for Linux - Your GPU. Your model. Your API.
 #
 #   curl -fsSL https://codyvolckmar.github.io/summon/install.sh | bash
 #   curl -fsSL https://codyvolckmar.github.io/summon/install.sh | bash -s -- --dry-run      # preview, installs nothing
@@ -36,7 +36,8 @@ fi
 command -v sudo >/dev/null || { echo "Run this as root (or install sudo)."; exit 1; }
 ENVS=()
 for v in SSH_CLIENT SSH_CONNECTION ALLOW_IP ENGINE CTX QUANT ONLY FAST SPEC THINK_BUDGET TEMPERATURE TOP_P TOP_K \
-         VERIFY_SHA256 OLLAMA_KV_CACHE_TYPE OLLAMA_KEEP_ALIVE SUMMON_GPU TERM; do
+         VERIFY_SHA256 OLLAMA_KV_CACHE_TYPE OLLAMA_KEEP_ALIVE SUMMON_GPU SUMMON_RAM TERM \
+         GO API_KEY TUNNEL PUBLIC_HOST DRAFT; do
   [ -n "${!v:-}" ] && ENVS+=("$v=${!v}")
 done
 echo "Summon needs root for apt, Docker and the firewall: asking sudo."

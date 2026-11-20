@@ -32,7 +32,7 @@ for y in range(H):
     k = min(1, max(0, (y - 30) / 70))
     gd.line([0, y, W, y], fill=(int(232 - 156 * k), int(237 - 96 * k), int(245 + 10 * k)))
 img.paste(grad, (0, 0), mask)
-d.text((330, 54), 'AI · OPEN-SOURCE · PRIVATE · INTELLIGENCE', font=tag, fill=(88, 166, 255))
+d.text((330, 54), 'YOUR GPU. YOUR MODEL. YOUR API.', font=tag, fill=(88, 166, 255))
 d.text((330, 82), 'One command turns your NVIDIA GPU into a private, OpenAI-compatible AI.', font=cap, fill=(232, 237, 245))
 
 PW, y = 820, 150

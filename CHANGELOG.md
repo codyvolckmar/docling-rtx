@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Just go:** `./summon.sh --auto` (or `GO=1`) asks nothing: the recommended model, context and weights for the machine, port 20001.
+- **`./summon.sh status`:** engine, model, context, port, health, last decode speed, HTTPS URL and GPU memory in one screen.
+- **Ollama survives reboots:** it runs as the `summon-ollama` systemd service (starts on boot, re-applies the IP lock). No systemd (many pod containers): the old `screen` session, and Summon says so.
+- **Plainer wording:** tagline "Your GPU. Your model. Your API."; the banner drops the stars and the "summoning" line; menus ask "Which model do you want to run?". Screenshots and the hero image regenerated.
+- **"What should I rent?"** table on the site and in the README: typical GPU rental prices and what Summon runs on each card.
+
 ## v1.2.0 (2026-11-20)
 
 - Docs site, terminal UI (banner + whiptail theme) and all screenshots restyled: enterprise slate/blue theme (replaces purple).

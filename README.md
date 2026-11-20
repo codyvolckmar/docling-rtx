@@ -1,6 +1,6 @@
 # Summon
 
-**AI · Open-source · Private · Intelligence**  ·  v1.2.0 ([changelog](CHANGELOG.md))
+**Your GPU. Your model. Your API.**  ·  v1.2.0 ([changelog](CHANGELOG.md))
 
 One command turns your NVIDIA GPU into a private AI with an OpenAI-compatible API. Summon picks the model, weights and context that fit your card, verifies the download, keeps the port private and tests tool calling before it hands you the URL. No cloud, no API bill, nobody else's servers.
 
@@ -29,7 +29,7 @@ SUMMON_GPU="RTX 3090:24576" ./summon.sh --dry-run     # preview a card you don't
 
 Piping a script into a shell gives it root. Read [summon.sh](summon.sh) first; it's one commented file.
 
-## What you can summon
+## Models
 
 **New:** OBLITERATUS's abliterated models, up to the 748B DeepSeek V4.1 Flash, set up correctly on llama.cpp. See [OBLITERATUS.md](OBLITERATUS.md).
 
@@ -46,10 +46,25 @@ Piping a script into a shell gives it root. Read [summon.sh](summon.sh) first; i
 | **DeepSeek V4.1 Flash OBLITERATED**: uncensored 748B MoE (refusals reduced, not removed; MMLU 83.6%), 2.66-bit GGUF, 237 GB download. Needs a 96 GB card + ~130 GB free RAM, or ~160 GB of VRAM across cards | llama.cpp | not offered | not offered |
 | **Ollama models**: Qwen3.8 27B, Qwen3.6 35B-A3B, Gemma 4 31B, K2 Horizon, Muse Glimmer… | Ollama | Qwen3.8 27B at 64K | most at 128K, 8-bit |
 
+## What should I rent?
+
+| GPU (VRAM) | Typical price | What Summon runs on it |
+|---|---|---|
+| RTX 3090 / 4090 (24 GB) | ~$0.15–0.75/hr | Ornith 1.5 9B at 128K, 8-bit. ThinkingCap / Qwen3.8 27B at 128K, 4-bit. Ornith 35B with experts in RAM |
+| RTX 5090 (32 GB) | ~$0.40–1.00/hr | ThinkingCap / Qwen3.8 27B at 128K, 6-bit |
+| **L40S / L40 / RTX A6000 (48 GB)** | ~$0.80–1.10/hr (L40S) | **Best value.** Nanbeige 33B at 128K, 6-bit; ThinkingCap, Qwen3.8, Ornith 35B at 128K, 8-bit (~42 tok/s measured on an L40) |
+| H100 (80 GB) | ~$2.20–2.90/hr | Every 27–35B model at 8-bit, fastest per token |
+| RTX PRO 6000 (96 GB) + 130 GB RAM | ~$0.60–2.10/hr | Everything, including DeepSeek V4.1 Flash 748B (experts in RAM) |
+| 2× H100 (160 GB) | ~$4.40–5.80/hr | DeepSeek V4.1 Flash fully on the GPUs |
+
+Prices are typical RunPod and Vast.ai rates (Sept–Nov 2026) and change daily. Check any card first: `SUMMON_GPU="L40S:46068" ./summon.sh --dry-run`.
+
 ## Usage
 
 ```bash
 ./summon.sh [PORT]                          # the wizard: one menu with every model, sized to your card
+./summon.sh --auto [PORT]                   # just go: the recommended model, no questions (or GO=1)
+./summon.sh status                          # what's running, health, last speed, GPU memory
 ./summon.sh nanbeige|qwen38pi|ornith35b|ornith9b|thinkingcap|qwen38obl|ornith9bobl|feyospace|deepseek41obl [PORT]   # skip the menu
 ONLY=1,3 ./summon.sh [PORT]                 # pull several Ollama models at once (rows in list order)
 ./summon.sh --dry-run [PORT]                # plan only, installs nothing
@@ -68,6 +83,8 @@ When it's done, Summon prints:
 `./summon.sh --connect` prints it all again.
 
 **Access:** llama.cpp models need an **API key**, generated once and kept across reruns (`API_KEY=...` to set your own, `--new-key` to rotate). On your own PC the server only listens on `127.0.0.1`. On a rented pod the port is open and the key is the lock; `TUNNEL=1` adds a free HTTPS URL through a Cloudflare quick tunnel. Cursor needs that, because it calls models from its own servers. `ALLOW_IP=1.2.3.4` adds a firewall on top. Ollama has no API keys, so Ollama models keep the IP lock: firewalled to your SSH IP on rented pods, `127.0.0.1` on your own PC.
+
+**Reboots:** llama.cpp runs in Docker and comes back on its own. Ollama runs as the `summon-ollama` systemd service, so it starts on boot too and re-applies its IP lock (iptables rules don't survive a reboot). Machines without systemd, like many pod containers, fall back to a `screen` session: rerun Summon after a reboot there.
 
 ## How it decides
 

@@ -340,7 +340,7 @@ if __name__ == '__main__':
     # 1) A6000: model menu, port, context, weights, final plan
     env = dict(base, SUMMON_GPU='NVIDIA RTX A6000:49140')
     run(f'cd {root}; clear; echo "$ ./summon.sh --dry-run"; "{S}" --dry-run; sleep 30', env, [
-        ('until', r'Which AI', 15), ('shot', '01-model-menu-a6000.png', 'summon.sh --dry-run  (RTX A6000, 48 GB)'),
+        ('until', r'Which model', 15), ('shot', '01-model-menu-a6000.png', 'summon.sh --dry-run  (RTX A6000, 48 GB)'),
         ('key', ENTER), ('until', r'Trade precision for speed', 10), ('shot', '11-draft-question.png', 'summon.sh --dry-run  (RTX A6000, 48 GB)'),
         ('key', ENTER), ('until', r'Step 1/2', 10), ('shot', '03-context-menu.png', 'summon.sh --dry-run  (RTX A6000, 48 GB)'),
         ('key', ENTER), ('until', r'Step 2/2', 10), ('shot', '04-weights-menu.png', 'summon.sh --dry-run  (RTX A6000, 48 GB)'),
@@ -350,7 +350,7 @@ if __name__ == '__main__':
     # 2) RTX 3090: the model menu pre-selects Ornith 9B
     env = dict(base, SUMMON_GPU='NVIDIA GeForce RTX 3090:24576', SUMMON_RAM='65536')   # a 64 GB RAM box: Ornith 35B fits with experts in RAM
     run(f'cd {root}; clear; "{S}" --dry-run 40000; sleep 30', env, [
-        ('until', r'Which AI', 15), ('shot', '06-model-menu-3090.png', 'summon.sh --dry-run 40000  (RTX 3090, 24 GB)'),
+        ('until', r'Which model', 15), ('shot', '06-model-menu-3090.png', 'summon.sh --dry-run 40000  (RTX 3090, 24 GB)'),
         ('key', ENTER), ('until', r'Step 1/2', 10), ('key', ENTER), ('until', r'Step 2/2', 10),
         ('shot', '07-weights-menu-3090.png', 'summon.sh --dry-run 40000  (RTX 3090, 24 GB)'),
         ('key', ENTER), ('until', r'Same, without menus', 10), ('shot', '08-dry-run-plan-3090.png', 'summon.sh --dry-run 40000  (RTX 3090, 24 GB)'),
@@ -358,6 +358,6 @@ if __name__ == '__main__':
     # 3) Ollama model checklist
     env = dict(base, SUMMON_GPU='NVIDIA RTX A6000:49140')
     run(f'cd {root}; clear; "{S}" --dry-run ollama 40000; sleep 30', env, [
-        ('until', r'Which AI', 25), ('shot', '09-ollama-menu.png', 'summon.sh --dry-run ollama 40000  (RTX A6000, 48 GB)'),
+        ('until', r'Which model', 25), ('shot', '09-ollama-menu.png', 'summon.sh --dry-run ollama 40000  (RTX A6000, 48 GB)'),
         ('key', ENTER), ('until', r'Endpoint:', 15), ('shot', '10-ollama-plan.png', 'summon.sh --dry-run ollama 40000  (RTX A6000, 48 GB)'),
     ], out)

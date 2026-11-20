@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Summon - AI, Open-source, Private Intelligence</title>
+<title>Summon - Your GPU. Your model. Your API.</title>
 <meta name="description" content="One command turns your NVIDIA GPU into a private, OpenAI-compatible AI endpoint. Open models, no cloud, no API bill.">
-<meta property="og:title" content="Summon - AI, Open-source, Private Intelligence">
+<meta property="og:title" content="Summon - Your GPU. Your model. Your API.">
 <meta property="og:description" content="One command turns your NVIDIA GPU into a private AI endpoint: picks the model, weights and context that fit your card.">
 <meta property="og:image" content="https://codyvolckmar.github.io/summon/img/summon-hero.png">
 <meta name="twitter:card" content="summary_large_image">
@@ -57,7 +57,7 @@
 
 <header>
   <h1 class="logo">SUMMON</h1>
-  <p class="tag">AI · Open-source · Private · Intelligence</p>
+  <p class="tag">Your GPU. Your model. Your API.</p>
   <p class="note" style="margin:6px 0 0">v1.2.0 · <a href="https://github.com/codyvolckmar/summon/blob/main/CHANGELOG.md">what's new: API keys, HTTPS tunnel, uncensored models</a></p>
   <p class="lede">One command turns your NVIDIA GPU into a <b>private AI</b> with an OpenAI-compatible API.
     Summon picks the model, weights and context that fit <b>your</b> card, verifies the download, keeps the port private
@@ -65,7 +65,7 @@
 </header>
 
 <section id="install">
-  <h2><span>01</span> Summon it</h2>
+  <h2><span>01</span> Install</h2>
   <div class="cmd"><span class="os">Linux · Ubuntu / Debian · rented GPU pods</span><span id="c1">curl -fsSL https://codyvolckmar.github.io/summon/install.sh | bash</span><button data-copy="c1">Copy</button></div>
   <div class="cmd"><span class="os">Windows 10 / 11 · PowerShell (runs in WSL 2)</span><span id="c2">irm https://raw.githubusercontent.com/codyvolckmar/summon/main/docs/install.ps1 | iex</span><button data-copy="c2">Copy</button></div>
   <div class="cmd"><span class="os">Just looking? Dry run: the full wizard, nothing installed</span><span id="c3">curl -fsSL https://codyvolckmar.github.io/summon/install.sh | bash -s -- --dry-run</span><button data-copy="c3">Copy</button></div>
@@ -88,7 +88,7 @@
 </section>
 
 <section id="models">
-  <h2><span>03</span> What you can summon</h2>
+  <h2><span>03</span> Models</h2>
   <table>
     <tr><th>Model</th><th>Engine</th><th>Good at</th><th>24 GB (RTX 3090 / 4090)</th><th>48 GB (RTX A6000)</th></tr>
     <tr><td><b>Nanbeige 4.3 33B</b></td><td>llama.cpp</td><td>Agentic coding. Top of the ≤40B class on Artificial Analysis (index 20).</td><td>up to 48K</td><td>128K (Q6_K) · 256K (Q3_K_M)</td></tr>
@@ -105,8 +105,23 @@
   <p class="note">All of them are in one menu, sized live to your card. Every model serves an OpenAI-compatible API: Summon prints the URL, key and client setup when it's done. One engine runs at a time; starting one stops the other.</p>
 </section>
 
+<section id="rent">
+  <h2><span>04</span> What should I rent?</h2>
+  <table>
+    <tr><th>GPU (VRAM)</th><th>Typical price</th><th>What Summon runs on it</th></tr>
+    <tr><td><b>RTX 3090 / 4090</b> (24 GB)</td><td>~$0.15–0.75/hr</td><td>Ornith 1.5 9B at 128K, 8-bit (pre-selected). ThinkingCap 27B or Qwen3.8 27B at 128K, 4-bit. Ornith 35B with experts in RAM. Good for trying it out and light agents.</td></tr>
+    <tr><td><b>RTX 5090</b> (32 GB)</td><td>~$0.40–1.00/hr</td><td>ThinkingCap 27B or Qwen3.8 27B at 128K, 6-bit.</td></tr>
+    <tr><td><b>L40S / L40 / RTX A6000</b> (48 GB)</td><td>~$0.80–1.10/hr (L40S)</td><td><b>Best value.</b> Nanbeige 33B at 128K, 6-bit (pre-selected). ThinkingCap, Qwen3.8 and Ornith 35B at 128K, 8-bit. Measured: ~42 tok/s with ThinkingCap on an L40.</td></tr>
+    <tr><td><b>H100</b> (80 GB)</td><td>~$2.20–2.90/hr</td><td>Every 27–35B model at 8-bit, Nanbeige 33B at 128K. Fastest per token.</td></tr>
+    <tr><td><b>RTX PRO 6000</b> (96 GB) + 130 GB RAM</td><td>~$0.60–2.10/hr</td><td>All of the above, plus DeepSeek V4.1 Flash 748B (experts in system RAM).</td></tr>
+    <tr><td><b>2× H100</b> (160 GB)</td><td>~$4.40–5.80/hr</td><td>DeepSeek V4.1 Flash 748B fully on the GPUs.</td></tr>
+  </table>
+  <p class="note">Start with a 48 GB card: it runs every 27–35B model at 128K with near-full precision. Prices are typical RunPod and Vast.ai rates (Sept–Nov 2026) and change daily; marketplace and spot instances are cheaper but less reliable.
+    Check any card before renting: <code>SUMMON_GPU="L40S:46068" ./summon.sh --dry-run</code>.</p>
+</section>
+
 <section id="shots">
-  <h2><span>04</span> See it first</h2>
+  <h2><span>05</span> See it first</h2>
   <p class="note">First, a real install on an NVIDIA L40. After that, real screens from <code>./summon.sh --dry-run</code>: the actual script and whiptail menus, nothing installed.</p>
   <div class="shots">
     <figure><a href="img/12-l40-thinkingcap-install.png"><img src="img/12-l40-thinkingcap-install.png" alt="Summon installing and serving ThinkingCap on an NVIDIA L40" loading="lazy"></a><figcaption>Real run on an NVIDIA L40 (48 GB): one line installs ThinkingCap 27B at Q8_0 with 128K context and passes the tool-call test.</figcaption></figure>
@@ -124,7 +139,7 @@
 </section>
 
 <section id="after">
-  <h2><span>05</span> After it's summoned</h2>
+  <h2><span>06</span> After install</h2>
   <ol class="steps">
     <li>Open the chat page it prints in your browser (paste the API key once), or copy the setup it prints for Hermes Agent, pi, opencode, OpenClaw or Cursor. See it again any time: <code>~/.summon/summon.sh --connect</code>.</li>
     <li>Cursor, phones, or a pod behind a proxy: rerun with <code>TUNNEL=1</code> for a free HTTPS URL (Cloudflare quick tunnel).</li>
@@ -135,7 +150,7 @@
 </section>
 
 <section id="needs">
-  <h2><span>06</span> What you need</h2>
+  <h2><span>07</span> What you need</h2>
   <div class="grid">
     <div class="card"><h3>GPU</h3><p>NVIDIA with 24 GB+ for the long-context models (RTX 3090 / 4090 / A6000 / 6000 Ada). 48 GB unlocks Nanbeige at 128–256K.</p></div>
     <div class="card"><h3>Linux</h3><p>Ubuntu or Debian (apt), NVIDIA driver installed, root or sudo. Summon installs Docker and the NVIDIA container toolkit if missing.</p></div>
@@ -147,7 +162,7 @@
 </section>
 
 <section id="contact">
-  <h2><span>07</span> Questions?</h2>
+  <h2><span>08</span> Questions?</h2>
   <div class="card">
     <h3>Cody Volckmar</h3>
     <p>Summon is a free, open-source side project, not a service. Questions, bugs and ideas: <a href="https://github.com/codyvolckmar/summon/issues">GitHub issues</a>.
