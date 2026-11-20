@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **API keys instead of IP locking (llama.cpp).** A key is generated once, kept in the data folder across reruns and model switches, and passed to llama-server as a file (`--api-key-file`, so it never shows in `docker inspect`). Rented pods no longer break when your IP changes or the provider NATs traffic. `API_KEY=...` sets your own, `API_KEY=none` restores IP locking, `--new-key` rotates it, `ALLOW_IP` adds a firewall on top. Ollama models keep the IP lock (Ollama has no keys).
+- **`TUNNEL=1`:** a free public HTTPS URL through a Cloudflare quick tunnel (`cloudflare/cloudflared:2026.11.1`). The raw port then only listens on 127.0.0.1. Cursor needs this.
+- **Connect your tools.** The Done screen prints llama-server's browser chat page, the key, and copy-paste setup for Hermes Agent, pi, opencode, OpenClaw and Cursor with the real URL, model, key and context filled in. `./summon.sh --connect` prints it again (it also picks up a restarted tunnel's new URL).
+- The tool-call test sends the key; the public address is detected via api.ipify.org (`PUBLIC_HOST=...` overrides).
+
 - **OBLITERATUS models (uncensored abliterations, published Aug-Nov 2026).** Listed last, so they are never pre-selected:
   - llama.cpp: Qwen3.8 27B OBLITERATED (V3), Ornith 1.5 9B OBLITERATED, feyospace-s1 OBLITERATED (cybersecurity ~28B, mradermacher's GGUFs). All three use their built-in MTP layer.
   - Ollama (opt-in Hugging Face rows): Llama 3.1 8B Lexi V2 OBLITERATED, Qwen3 4B structured-output stage A OBLITERATED.

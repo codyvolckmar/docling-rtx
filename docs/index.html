@@ -84,9 +84,10 @@
     <div class="card"><h3>Reads your GPU</h3><p>Free VRAM decides everything: which models fit, how much context, which weights. Nothing is guessed.</p></div>
     <div class="card"><h3>Picks for you</h3><p>The best model that reaches 128K context on your card is pre-selected. Context first, then the most precise weights that still fit.</p></div>
     <div class="card"><h3>Verifies</h3><p>Resumable downloads, exact byte counts, GGUF header checks, sha256 on request. Every layer stays on the GPU or it fails loudly.</p></div>
-    <div class="card"><h3>Stays private</h3><p>On your own PC it only listens on <code>0.0.0.0</code>. On a rented pod it's firewalled to the IP you SSH in from. No VPN needed.</p></div>
+    <div class="card"><h3>Stays private</h3><p>An API key, generated once and kept across reruns. On your own PC it only listens on <code>127.0.0.1</code>. On a rented pod, add <code>TUNNEL=1</code> for a free HTTPS URL. No VPN needed.</p></div>
     <div class="card"><h3>Tuned per model</h3><p>The model's own chat template, native tool calls, a host-RAM prompt cache, and speculative decoding with each model's draft: MTP heads, a 3B draft model, n-gram drafts.</p></div>
     <div class="card"><h3>Proves it works</h3><p>Before handing you the URL, it makes a real tool call and checks it comes back in OpenAI format.</p></div>
+    <div class="card"><h3>Connects your tools</h3><p>Prints a browser chat page plus ready-to-paste setup for Hermes Agent, pi, opencode, OpenClaw and Cursor, with your URL and key filled in.</p></div>
   </div>
 </section>
 
@@ -105,8 +106,7 @@
     <tr><td><b>DeepSeek V4.1 Flash OBLITERATED</b></td><td>llama.cpp</td><td>Uncensored 748B MoE (refusals reduced, not removed; MMLU 83.6%). 237 GB download. Needs a 96 GB card + ~130 GB free RAM, or ~160 GB of VRAM across cards.</td><td>not offered</td><td>not offered</td></tr>
     <tr><td><b>Ollama models</b></td><td>Ollama</td><td>Qwen3.8 27B, Qwen3.6 35B-A3B, Gemma 4 31B, K2 Horizon, Muse Glimmer…</td><td>Qwen3.8 27B at 64K</td><td>most at 128K, 8-bit</td></tr>
   </table>
-  <p class="note">All of them are in one menu, sized live to your card. Every model serves an OpenAI-compatible API: point any client (pi, Continue, Open WebUI, your own code) at
-    <code>http://localhost:PORT/v1</code>. One engine runs at a time; starting one stops the other.</p>
+  <p class="note">All of them are in one menu, sized live to your card. Every model serves an OpenAI-compatible API: Summon prints the URL, key and client setup when it's done. One engine runs at a time; starting one stops the other.</p>
 </section>
 
 <section id="shots">
@@ -130,9 +130,10 @@
 <section id="after">
   <h2><span>05</span> After it's summoned</h2>
   <ol class="steps">
-    <li>Point your tool at <code>http://localhost:PORT/v1</code> (rented pod: <code>http://&lt;pod-ip&gt;:PORT/v1</code>), any API key, and set its context window to the number Summon prints.</li>
+    <li>Open the chat page it prints in your browser (paste the API key once), or copy the setup it prints for Hermes Agent, pi, opencode, OpenClaw or Cursor. See it again any time: <code>~/.summon/summon.sh --connect</code>.</li>
+    <li>Cursor, phones, or a pod behind a proxy: rerun with <code>TUNNEL=1</code> for a free HTTPS URL (Cloudflare quick tunnel).</li>
     <li>Switch models or weights any time: run <code>~/.summon/summon.sh</code> again.</li>
-    <li>New home IP on a rented pod: <code>~/.summon/summon.sh --lock</code>. Share on your LAN: <code>ALLOW_IP=192.168.1.0/24 ~/.summon/summon.sh</code>.</li>
+    <li>New key: <code>~/.summon/summon.sh --new-key</code>. Firewall on top of the key: <code>ALLOW_IP=203.0.113.7 ~/.summon/summon.sh</code>.</li>
     <li>Remove everything: <code>~/.summon/summon.sh --uninstall</code>. All options: <code>--help</code>.</li>
   </ol>
 </section>

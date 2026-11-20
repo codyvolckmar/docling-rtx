@@ -53,14 +53,21 @@ Piping a script into a shell gives it root. Read [summon.sh](summon.sh) first; i
 ./summon.sh nanbeige|qwen38pi|ornith35b|ornith9b|thinkingcap|qwen38obl|ornith9bobl|feyospace|deepseek41obl [PORT]   # skip the menu
 ONLY=1,3 ./summon.sh [PORT]                 # pull several Ollama models at once (rows in list order)
 ./summon.sh --dry-run [PORT]                # plan only, installs nothing
-./summon.sh --lock [PORT]                   # re-lock a rented pod's port to your current IP
+./summon.sh --connect                       # chat page, API key and client setup of the running server
+TUNNEL=1 ./summon.sh [PORT]                 # also get a public HTTPS URL (Cursor, phones)
+./summon.sh --lock [PORT]                   # firewall the port to your current IP, on top of the key
 ./summon.sh --uninstall [llamacpp|ollama]   # remove an engine and its model files
 ./summon.sh --help                          # every option (CTX, QUANT, ALLOW_IP, SPEC, ...)
 ```
 
-Then point any OpenAI-compatible client at `http://localhost:PORT/v1` (rented pod: `http://<pod-ip>:PORT/v1`) with any API key, and set its context window to the number Summon prints.
+When it's done, Summon prints:
+- the **chat page** (llama-server's built-in web chat: open it in a browser, paste the key once);
+- the **base URL, model name, API key and context window**;
+- **copy-paste setup for Hermes Agent, pi, opencode, OpenClaw and Cursor**, with your values filled in.
 
-**Access:** on your own PC (no SSH session) the server only listens on `127.0.0.1`. Over SSH (rented pods) it's firewalled to the IP you SSH in from. `ALLOW_IP=1.2.3.4,192.168.1.0/24` shares it with those addresses, `ALLOW_IP=any` opens it.
+`./summon.sh --connect` prints it all again.
+
+**Access:** llama.cpp models need an **API key**, generated once and kept across reruns (`API_KEY=...` to set your own, `--new-key` to rotate). On your own PC the server only listens on `127.0.0.1`. On a rented pod the port is open and the key is the lock; `TUNNEL=1` adds a free HTTPS URL through a Cloudflare quick tunnel. Cursor needs that, because it calls models from its own servers. `ALLOW_IP=1.2.3.4` adds a firewall on top. Ollama has no API keys, so Ollama models keep the IP lock: firewalled to your SSH IP on rented pods, `127.0.0.1` on your own PC.
 
 ## How it decides
 
