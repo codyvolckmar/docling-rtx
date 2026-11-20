@@ -1,4 +1,4 @@
-# Summon installer for Windows - AI, Open-source, Private Intelligence.
+# Summon installer for Windows - Your GPU. Your model. Your API.
 #
 #   irm https://raw.githubusercontent.com/codyvolckmar/summon/main/docs/install.ps1 | iex
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/codyvolckmar/summon/main/docs/install.ps1))) --dry-run
@@ -18,13 +18,9 @@ if ($PassArgs.Count -eq 0 -and $env:SUMMON_ARGS) { $PassArgs = $env:SUMMON_ARGS 
 function Say($text, $color = 'Gray') { Write-Host $text -ForegroundColor $color }
 
 Say ''
-Say '    ____    _   _   __  __   __  __    ___    _   _' Magenta
-Say '   / ___|  | | | | |  \/  | |  \/  |  / _ \  | \ | |' Magenta
-Say '   \___ \  | | | | | |\/| | | |\/| | | | | | |  \| |' Magenta
-Say '    ___) | | |_| | | |  | | | |  | | | |_| | | |\  |' Magenta
-Say '   |____/   \___/  |_|  |_| |_|  |_|  \___/  |_| \_|' Magenta
-Say '         *  A I  .  Open-source  .  Private  .  Intelligence  *' Cyan
-Say '   Windows edition: Summon runs inside WSL 2 with your NVIDIA GPU.' Cyan
+Say '  SUMMON   Your GPU. Your model. Your API.' White
+Say '  Private, OpenAI-compatible LLM endpoint on your own GPU. No cloud, no per-token bill.' Gray
+Say '  Windows edition: runs inside WSL 2 with your NVIDIA GPU.' Gray
 Say ''
 
 # 1. NVIDIA driver on Windows (WSL uses the Windows driver; never install a Linux driver inside WSL)
@@ -43,7 +39,7 @@ $distros = @((wsl.exe -l -q 2>$null) | ForEach-Object { ($_ -replace "`0", '').T
 if ($distros -notcontains $Distro) {
   Say "Installing WSL 2 + $Distro. Windows asks for admin rights; a reboot may follow." Yellow
   Start-Process wsl.exe -ArgumentList "--install -d $Distro" -Verb RunAs -Wait
-  Say "When $Distro opens, create your Linux user. Then run this command again to summon your AI." Green
+  Say "When $Distro opens, create your Linux user. Then run this command again to finish setup." Green
   return
 }
 

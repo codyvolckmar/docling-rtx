@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Summon - AI, Open-source, Private Intelligence. One-shot setup that turns an NVIDIA GPU (rented pod or your
+# Summon - Your GPU. Your model. Your API. One-shot setup that turns an NVIDIA GPU (rented pod or your
 # own PC) into a private, OpenAI-compatible AI endpoint: picks the model, weights and context that fit the card,
 # verifies the download, keeps the port private and tests tool calling before handing you the URL.
 #
@@ -39,6 +39,9 @@
 #   ./summon.sh [PORT]                    the wizard: one menu with every model that fits, then context/weights
 #   ./summon.sh MODEL_ID [PORT]           skip the model menu, e.g. ./summon.sh thinkingcap 20000 (= ENGINE=...)
 #   ./summon.sh ollama [PORT]             the menu, with the recommended Ollama model pre-selected
+#   ./summon.sh --auto [PORT]             just go: no questions, the recommended model/context/weights, port 20001
+#                                         (GO=1 does the same, e.g. curl ... | GO=1 bash)
+#   ./summon.sh status                    what's running: model, context, port, health, last speed, GPU memory
 #   ./summon.sh --dry-run [PORT]          the whole wizard, then print the plan: installs and downloads nothing
 #   ./summon.sh --verify ...              also hash the whole model file with sha256 (slow)
 #   ./summon.sh --connect                 show the chat page, API key and client setup of the running server
@@ -483,10 +486,11 @@ apt_get() {   # install packages; runs apt-get update once per run first (fresh 
   apt-get install -y -qq "$@" >/dev/null
 }
 
-# --- Branding: banner + whiptail theme (your own NEWT_COLORS wins) ---
-BACKTITLE="SUMMON v$SUMMON_VERSION  -  AI . Open-source . Private . Intelligence"
+# --- Branding: banner + whiptail theme (steel blue; your own NEWT_COLORS wins) ---
+TAGLINE="Your GPU. Your model. Your API."
+BACKTITLE="SUMMON v$SUMMON_VERSION  -  $TAGLINE"
 export NEWT_COLORS=${NEWT_COLORS:-'root=brightblue,black roottext=brightblue,black window=white,black border=blue,black title=brightblue,black textbox=white,black listbox=white,black actlistbox=black,blue sellistbox=brightblue,black actsellistbox=black,brightblue checkbox=brightblue,black actcheckbox=black,blue button=black,blue actbutton=white,brightblue compactbutton=white,black entry=white,black disentry=gray,black emptyscale=,black fullscale=,blue helpline=white,black'}
-banner() {
+banner() {   # wordmark, tagline, one plain line on what it does
   local c1="" c2="" c3="" r="" utf=0
   if [ -t 1 ]; then
     if [[ ${TERM:-} == *256color* ]]; then c1=$'\e[38;5;75m' c2=$'\e[38;5;111m' c3=$'\e[38;5;153m'
@@ -496,18 +500,18 @@ banner() {
   [[ "$(locale charmap 2>/dev/null)" == UTF-8 ]] && utf=1
   echo
   if (( utf )); then
-    printf '%s\n' "${c1}      ✦                 ·                ✦                  ·         ✦${r}" \
+    printf '%s\n' \
       "${c1}   ███████╗██╗   ██╗███╗   ███╗███╗   ███╗ ██████╗ ███╗   ██╗${r}" \
       "${c1}   ██╔════╝██║   ██║████╗ ████║████╗ ████║██╔═══██╗████╗  ██║${r}" \
       "${c2}   ███████╗██║   ██║██╔████╔██║██╔████╔██║██║   ██║██╔██╗ ██║${r}" \
       "${c2}   ╚════██║██║   ██║██║╚██╔╝██║██║╚██╔╝██║██║   ██║██║╚██╗██║${r}" \
       "${c2}   ███████║╚██████╔╝██║ ╚═╝ ██║██║ ╚═╝ ██║╚██████╔╝██║ ╚████║${r}" \
-      "${c1}   ╚══════╝ ╚═════╝ ╚═╝     ╚═╝╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═══╝${r}" \
-      "${c3}         ✦  A I  ·  Open-source  ·  Private  ·  Intelligence  ✦${r}"
+      "${c1}   ╚══════╝ ╚═════╝ ╚═╝     ╚═╝╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═══╝${r}"
   else
-    printf '%s\n' "${c2}   *  S U M M O N  *${r}" "${c3}   AI . Open-source . Private . Intelligence${r}"
+    printf '%s\n' "${c2}   SUMMON${r}"
   fi
-  echo "${c3}   Summoning your own LLM onto this GPU. No cloud, no API bill, nobody else's servers.  v$SUMMON_VERSION${r}"
+  echo "${c3}   $TAGLINE  v$SUMMON_VERSION${r}"
+  echo "   A private, OpenAI-compatible LLM endpoint on your own GPU. No cloud, no per-token bill."
   echo
 }
 
@@ -579,6 +583,7 @@ lock_port() {   # $1 = external port, $2 = docker|host
   else
     iptables -I INPUT 1 -p tcp --dport "$port" -j "$chain"
   fi
+  LOCKED_TO=$allow
   echo "Port $port locked to: ${allow//,/, }   (check hits: iptables -L $chain -v -n)"
 }
 
@@ -732,7 +737,53 @@ stop_llamacpp() {
   fi
   unlock DOCKER-USER
 }
-stop_ollama() { screen -S ollama -X quit 2>/dev/null || true; unlock INPUT; }
+stop_ollama() {
+  systemctl disable --now summon-ollama >/dev/null 2>&1 || true
+  screen -S ollama -X quit 2>/dev/null || true; unlock INPUT
+}
+has_systemd() { [ -d /run/systemd/system ] && command -v systemctl >/dev/null; }
+OL_UNIT=/etc/systemd/system/summon-ollama.service
+start_ollama_server() {   # systemd service if available (survives reboots), else a screen session
+  if has_systemd; then
+    local self lock=""
+    self=$(readlink -f "$0")
+    # A reboot clears iptables: re-apply the IP lock once the server is up (Ollama has no API keys).
+    [ "$ACCESS" != local ] && [ -n "${LOCKED_TO:-}" ] && [ "$LOCKED_TO" != any ] && \
+      lock="ExecStartPost=-/usr/bin/env ALLOW_IP=$LOCKED_TO /bin/bash $self --lock $PORT"
+    cat > "$OL_UNIT" <<UNIT
+[Unit]
+Description=Summon: Ollama on port $PORT
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=root
+Environment=HOME=${HOME:-/root}
+Environment=OLLAMA_HOST=$BIND:$PORT
+Environment=OLLAMA_CONTEXT_LENGTH=$OL_CTX_MAX
+Environment=OLLAMA_KV_CACHE_TYPE=$KV_TYPE
+Environment=OLLAMA_FLASH_ATTENTION=1
+Environment=OLLAMA_NUM_PARALLEL=1
+Environment=OLLAMA_MAX_LOADED_MODELS=1
+Environment=OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:--1}
+${OLLAMA_MODELS:+Environment=OLLAMA_MODELS=$OLLAMA_MODELS}
+ExecStart=$(command -v ollama) serve
+$lock
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl daemon-reload
+    systemctl enable --now summon-ollama >/dev/null
+    OL_MODE="systemd service summon-ollama (starts on boot)"
+  else
+    OLLAMA_HOST=$BIND:$PORT OLLAMA_CONTEXT_LENGTH=$OL_CTX_MAX OLLAMA_KV_CACHE_TYPE="$KV_TYPE" \
+      screen -dmS ollama ollama serve
+    OL_MODE="screen session (no systemd here: rerun $0 after a reboot)"
+  fi
+}
 wait_port_free() {   # after stopping our servers: give them 5 s to let go, then refuse a port someone else holds
   local i
   for i in 1 2 3 4 5; do curl -s --max-time 1 -o /dev/null "http://127.0.0.1:$PORT" || return 0; sleep 1; done
@@ -746,12 +797,14 @@ wait_port_free() {   # after stopping our servers: give them 5 s to let go, then
 # ======================================================================================================
 # Arguments
 # ======================================================================================================
-ACTION=install PORT="" TARGET="" YES=0 DRY_RUN=0 NEW_KEY=0
+ACTION=install PORT="" TARGET="" YES=0 DRY_RUN=0 NEW_KEY=0 AUTO=0; [ "${GO:-}" = 1 ] && AUTO=1
 while (( $# )); do
   case "$1" in
     --uninstall) ACTION=uninstall ;;
     --lock) ACTION=lock ;;
     --connect) ACTION=connect ;;
+    status|--status) ACTION=status ;;
+    --auto|--go) AUTO=1 ;;
     --new-key) NEW_KEY=1 ;;
     --verify) VERIFY_SHA256=1 ;;
     --dry-run) DRY_RUN=1 ;;
@@ -769,7 +822,7 @@ if [ -n "$PORT" ]; then
   [[ "$PORT" =~ ^[0-9]+$ ]] && PORT=$((10#$PORT)) && (( PORT >= 1 && PORT <= 65535 )) || { echo "Invalid port: '$PORT'"; exit 1; }
 fi
 
-# --- Re-lock only: no restart. Locking needs no running server (Ollama's screen session dies on a reboot): ---
+# --- Re-lock only: no restart. Locking needs no running server (e.g. the Ollama service re-locks itself on boot): ---
 # --- --lock PORT works standalone (host mode); a matching llama.cpp container switches the rule to DOCKER-USER. ---
 if [ "$ACTION" = lock ]; then
   MODE=""
@@ -792,6 +845,40 @@ if [ "$ACTION" = connect ]; then
   [ -s "$CONNECT_STATE" ] || { echo "No Summon server set up yet (nothing in $CONNECT_STATE). Run $0 first."; exit 1; }
   lc_running || ol_running || echo "Note: no Summon server is running right now; this is the last one set up."
   print_connect; exit 0
+fi
+
+# --- Status: what's running, where, how fast ---
+if [ "$ACTION" = status ]; then
+  echo "Summon v$SUMMON_VERSION status"
+  if lc_running; then
+    c=$(lc_container); p=$(lc_port)
+    args=$(docker inspect -f '{{join .Args " "}}' "$c" 2>/dev/null)
+    m=$(sed -n 's/.*--alias \([^ ]*\).*/\1/p' <<< "$args"); ctx=$(sed -n 's/.* -c \([0-9]*\).*/\1/p' <<< "$args")
+    f=$(sed -n 's#.*-m /models/\([^ ]*\).*#\1#p' <<< "$args")
+    since=$(docker inspect -f '{{.State.StartedAt}}' "$c" 2>/dev/null | cut -d. -f1 | tr T ' ')
+    h=$(curl -fs --max-time 3 "http://127.0.0.1:$p/health" 2>/dev/null | grep -q '"ok"' && echo ready || echo "loading or down")
+    speed=$(docker logs --tail 400 "$c" 2>&1 | grep -E '^.* eval time' | grep -v prompt | tail -1 | grep -oE '[0-9.]+ tokens per second' || true)
+    echo "  Engine:    llama.cpp (container $c), $h, up since $since UTC"
+    echo "  Model:     $m  ($f)"
+    echo "  Context:   ${ctx:-?} tokens        Port: $p ($(docker port "$c" 8080/tcp | head -1))"
+    echo "  Last decode speed: ${speed:-no request yet}"
+    if docker ps -q -f "name=^$TUNNEL_NAME\$" | grep -q .; then echo "  HTTPS:     $(tunnel_url)"; fi
+  elif ol_running; then
+    p=$(ol_port)
+    if systemctl is-active summon-ollama >/dev/null 2>&1; then how="systemd service summon-ollama (starts on boot)"
+    elif screen -ls 2>/dev/null | grep -q '\.ollama'; then how="screen session (not restarted after a reboot)"
+    else how="not started by Summon"; fi
+    echo "  Engine:    Ollama on port ${p:-?}, $how"
+    OLLAMA_HOST=127.0.0.1:${p:-11434} ollama ps 2>/dev/null | sed 's/^/  /'
+  else
+    echo "  No Summon server is running. Start one: $0"
+  fi
+  if command -v nvidia-smi >/dev/null; then
+    nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits 2>/dev/null |
+      awk -F', ' '{printf "  GPU:       %s, %d / %d MB VRAM, %d%% busy\n", $1, $2, $3, $4}'
+  fi
+  echo "  Connect:   $0 --connect      Logs: docker logs -f summon / journalctl -u summon-ollama -f"
+  exit 0
 fi
 
 # --- Uninstall: one engine by name, or both (a llama.cpp model name means the whole llama.cpp engine) ---
@@ -821,6 +908,7 @@ if [ "$ACTION" = uninstall ]; then
   fi
   if [ "$TARGET" != llamacpp ]; then
     stop_ollama
+    if [ -f "$OL_UNIT" ]; then rm -f "$OL_UNIT"; systemctl daemon-reload 2>/dev/null || true; fi
     if [ -f /etc/systemd/system/ollama.service ]; then
       systemctl stop ollama 2>/dev/null || true
       systemctl disable ollama 2>/dev/null || true
@@ -904,6 +992,7 @@ mount_ok() {   # $1 = folder: can a container see a file in it?
 
 ask_port() {   # the last question: which port to serve on (skipped when given as an argument)
   [ -n "$PORT" ] && return 0
+  if (( AUTO )); then PORT=20001; return 0; fi
   if (( HAS_WHIPTAIL && INTERACTIVE )); then
     PORT=$(whiptail --backtitle "$BACKTITLE" --title "Port" --inputbox "Last step: port for the AI endpoint on this machine:" 9 60 20001 3>&1 1>&2 2>&3) || { echo "Cancelled."; exit 0; }
   else
@@ -1029,6 +1118,10 @@ fi
 AVAIL_RAM_MB=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
 if (( DRY_RUN )) && [ -n "${SUMMON_RAM:-}" ]; then AVAIL_RAM_MB=$SUMMON_RAM; fi   # preview: SUMMON_RAM=65536
 INTERACTIVE=0; [ -t 0 ] && [ -t 1 ] && INTERACTIVE=1
+if (( AUTO )); then   # just go: the recommended model, context and weights for this machine, port 20001
+  INTERACTIVE=0
+  echo "Auto mode: no questions. Picking the recommended model, context and weights for this machine."
+fi
 if (( INTERACTIVE && ! DRY_RUN )) && ! command -v whiptail >/dev/null; then
   apt_get whiptail >/dev/null 2>&1 || true   # optional: plain-text menus work too
 fi
@@ -1107,7 +1200,7 @@ if [ -z "${ENGINE:-}" ] || { [ "$ENGINE" = ollama ] && [ -z "${ONLY:-}" ]; }; th
     PICKED=_h1
     while [[ $PICKED == _* ]]; do   # a header or the gap: show the menu again
       PICKED=$(CHOOSE_NOTAGS=1 CHOOSE_W=150 CHOOSE_TEXTLINES=1 choose "Summon v$SUMMON_VERSION - ${GPU_COUNT}x $GPU_NAME, $((FREE_MB/1024)) GB" \
-        "Which AI do you want to summon? Pre-selected: the best model reaching 128K here. Size = weights ~VRAM@context." \
+        "Which model do you want to run? Pre-selected: the best model reaching 128K here. Size = weights ~VRAM@context." \
         "$DEF_ENGINE" "${ITEMS[@]}") || { echo "Cancelled."; exit 0; }
     done
   fi
@@ -1641,6 +1734,7 @@ install_ollama() {
     echo "Would do (dry run, nothing done):"
     echo "  1. Install what's missing: curl, screen, zstd, Ollama"
     echo "  2. Start Ollama on $BIND:$PORT ($KV_TYPE KV cache, 128K default context, models stay loaded)"
+    echo "     as $(has_systemd && echo "a systemd service (summon-ollama, starts on boot)" || echo "a screen session (no systemd: not restarted after a reboot)")"
     echo "  3. Access: $(access_text ollama)  (Ollama has no API keys)"
     echo "  4. Pull:"
     for i in "${SEL[@]}"; do
@@ -1656,12 +1750,11 @@ install_ollama() {
   # --- Start the server detached in screen, default context 128K ---
   stop_llamacpp; stop_ollama; wait_port_free
   apply_access host   # before the port opens
-  OLLAMA_HOST=$BIND:$PORT OLLAMA_CONTEXT_LENGTH=$OL_CTX_MAX OLLAMA_KV_CACHE_TYPE="$KV_TYPE" \
-    screen -dmS ollama ollama serve
+  start_ollama_server
   echo "Waiting for ollama on port $PORT..."
   for i in $(seq 60); do curl -fs --max-time 2 "http://127.0.0.1:$PORT" >/dev/null 2>&1 && break; sleep 1; done
   curl -fs --max-time 2 "http://127.0.0.1:$PORT" >/dev/null 2>&1 || {
-    echo "Ollama didn't come up on $PORT after 60 s. Check: screen -r ollama"; exit 1; }
+    echo "Ollama didn't come up on $PORT after 60 s. Check: journalctl -u summon-ollama or screen -r ollama"; exit 1; }
 
   # Pull selected models. Ones that don't fit at 128K get num_ctx 64K baked in (same name).
   for i in "${SEL[@]}"; do
@@ -1692,7 +1785,9 @@ install_ollama() {
   echo "Done. Ollama is serving on $BIND:$PORT ($KV_TYPE KV cache, $((OL_CTX_MAX/1024))K default context, $QUANT_ORDER)"
   for i in "${SEL[@]}"; do echo "  ${REF[i]}  ->  $((MCTX[i] ? MCTX[i]/1024 : 64))K context"; done
   echo "  Access:            $(access_text ollama)  (Ollama has no API keys)"
-  echo "  Attach to server:  screen -r ollama   (detach: Ctrl+A then D)"
+  echo "  Runs as:           $OL_MODE"
+  [[ $OL_MODE == screen* ]] && echo "  Attach to server:  screen -r ollama   (detach: Ctrl+A then D)"
+  [[ $OL_MODE == systemd* ]] && echo "  Logs:              journalctl -u summon-ollama -f"
   echo "  Run a model:       OLLAMA_HOST=127.0.0.1:$PORT ollama run <model>"
   echo "  Monitor:           btop / bmon"
   if (( ${#SEL[@]} )); then
