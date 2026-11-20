@@ -43,7 +43,8 @@
 #   ./summon.sh --verify ...              also hash the whole model file with sha256 (slow)
 #   ./summon.sh --connect                 show the chat page, API key and client setup of the running server
 #   ./summon.sh --new-key MODEL_ID [PORT] start with a new API key (the old one stops working)
-#   ./summon.sh --lock [PORT]             firewall the port to your current IP (ALLOW_IP=... to choose)
+#   ./summon.sh --lock [PORT]             firewall the port to your current IP (also works with no server
+#                                         running, e.g. after a reboot; ALLOW_IP=... to choose)
 #   ./summon.sh --uninstall [llamacpp|ollama] [-y]   remove one engine (or both) and its model files
 #   ./summon.sh --help | --version        this text / the version
 #   The one-line installer saves this script as ~/.summon/summon.sh: rerun that for every command above.
@@ -88,7 +89,7 @@
 #   Logs: docker logs -f summon. Speed and draft acceptance: http://<host>:PORT/metrics (send the key).
 set -e
 export DEBIAN_FRONTEND=noninteractive
-SUMMON_VERSION=1.1.0
+SUMMON_VERSION=1.2.0
 
 # ======================================================================================================
 # llama.cpp models (one runs at a time; all share the image, container, data folder and server tuning)
@@ -107,6 +108,7 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
   LC_LORA="" LC_EXTRA_BYTES=0   # optional LoRA adapter: "file|bytes|sha256|repo URL" (loaded with --lora)
   LC_FILE_SEP=-                 # weights file = $LC_FILE_PREFIX$LC_FILE_SEP$QUANT.gguf (mradermacher uses ".")
   LC_TEMPLATE=""                # optional chat template replacing the GGUF's own: "file|sha256|URL" (--chat-template-file)
+  LC_BLURB=""                   # one-line menu description (the model's own summary, shortened; lives here so it can't drift from the id list)
   LC_ARGS=()                    # extra llama-server arguments (e.g. a repeat penalty the model card requires)
   LC_PARTS=()                   # split GGUF: "NNNNN-of-NNNNN|bytes|sha256" per file, named $prefix$sep$QUANT-$part.gguf
   LC_HOST_PCT=0                 # share of the weights llama.cpp keeps in host memory/disk (never VRAM), e.g. Engram tables
@@ -125,6 +127,7 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
       # Full attention in all 52 layers: 8 KV heads x (128 K + 128 V) -> ~110 MB of K/V per 1K tokens at q8_0.
       # RTX A6000 48 GB: 128K fits Q6_K, 256K only Q3_K_M ("low quality" per bartowski). 24 GB cards: ~48K.
       LC_TITLE="Nanbeige 4.3 33B" LC_ALIAS=nanbeige-33b
+      LC_BLURB="Lightweight agent for coding and research. AA index 20"
       LC_REPO=https://huggingface.co/bartowski/Nanbeige_Nanbeige4.3-33B-GGUF/resolve/main
       LC_FILE_PREFIX=Nanbeige_Nanbeige4.3-33B
       LC_QUANTS=(   # bartowski's GGUFs, best first: "quant|bytes|sha256" (from the Hugging Face file list)
@@ -160,6 +163,7 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
       # Sampling: the card's "precise coding" row (temp 0.6, top_p 0.95, top_k 20, no presence penalty).
       # llama.cpp turns --cache-reuse off for hybrid models by itself, and speculation uses checkpoints there.
       LC_TITLE="Ornith 1.5 9B" LC_ALIAS=ornith-9b
+      LC_BLURB="Self-improving 9B: light, fast, 256K on 24 GB cards"
       LC_REPO=https://huggingface.co/ornith-ai/Ornith-1.5-9B-GGUF/resolve/main
       LC_FILE_PREFIX=Ornith-1.5-9B
       LC_QUANTS=(   # official GGUFs (ornith-ai), best first: "quant|bytes|sha256"
@@ -186,6 +190,7 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
       # Card settings: thinking off, temp 0.8, top_p 1.0. In pi use "api": "openai-completions" (the adapter wasn't
       # trained with the Responses API).
       LC_TITLE="Qwen3.8 27B pi" LC_ALIAS=qwen3.8-pi
+      LC_BLURB="Qwen3.8 + RL-tuned LoRA for the pi agent. No thinking"
       LC_REPO=https://huggingface.co/ggml-org/Qwen3.8-27B-GGUF/resolve/main
       LC_FILE_PREFIX=Qwen3.8-27B
       LC_QUANTS=(   # ggml-org's GGUFs, best first: "quant|bytes|sha256"
@@ -213,6 +218,7 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
       # context. Vendor benchmarks only (not tested by AA): Terminal-Bench 2.1 68.5, SWE Atlas QnA 39.8.
       # Ollama's ornith-1.5:35b ships no chat template or tool parser, hence llama.cpp.
       LC_TITLE="Ornith 1.5 35B" LC_ALIAS=ornith-35b
+      LC_BLURB="Self-improving MoE for coding agents. 3B active, fast"
       LC_REPO=https://huggingface.co/ornith-ai/Ornith-1.5-35B-A3B-GGUF/resolve/main
       LC_FILE_PREFIX=Ornith-1.5-35B
       LC_QUANTS=(   # official GGUFs (ornith-ai), best first: "quant|bytes|sha256"
@@ -240,6 +246,7 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
       # Sampling: the base model's thinking-mode settings, as the card says (greedy decoding can loop). Vision needs
       # the separate mmproj file, which Summon doesn't load (text only).
       LC_TITLE="ThinkingCap Qwen3.8 27B" LC_ALIAS=thinkingcap-27b
+      LC_BLURB="Qwen3.8 that thinks 37% less, MTP on. PolyForm SB"
       LC_REPO=https://huggingface.co/bottlecapai/ThinkingCap-Qwen3.8-27B-GGUF/resolve/main
       LC_FILE_PREFIX=ThinkingCap-Qwen3.8-27B
       LC_QUANTS=(   # bottlecapai's GGUFs, best first: "quant|bytes|sha256"
@@ -263,6 +270,7 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
       # Card settings for agents: temp 0.1-0.3 and repetition penalty 1.15 ("critical", greedy loops on tool calls),
       # no top_p/top_k, thinking off. Read from the GGUF (2026-11-20): qwen35, 64 layers + MTP layer (blk.64).
       LC_TITLE="Qwen3.8 27B OBLITERATED" LC_ALIAS=qwen3.8-obliterated
+      LC_BLURB="Uncensored Qwen3.8 (abliterated V3), MMLU -2.1pp. No thinking"
       LC_REPO=https://huggingface.co/OBLITERATUS/Qwen3.8-27B-OBLITERATED/resolve/main
       LC_FILE_PREFIX=Qwen3.8-27B-OBLITERATED
       LC_QUANTS=(   # OBLITERATUS's GGUFs, best first: "quant|bytes|sha256"
@@ -287,6 +295,7 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
       # best. Same GGUF layout as Ornith 1.5 9B (read 2026-11-20: 32 layers, full attention every 4th, MTP blk.32);
       # its own template has tools. The card says to run with reasoning off (thinking loops), hence enable_thinking false.
       LC_TITLE="Ornith 1.5 9B OBLITERATED" LC_ALIAS=ornith-9b-obliterated
+      LC_BLURB="Uncensored Ornith 9B (abliterated), MMLU -4pp. No thinking"
       LC_REPO=https://huggingface.co/OBLITERATUS/Ornith-1.5-9B-OBLITERATED/resolve/main
       LC_FILE_PREFIX=Ornith-1.5-9B-OBLITERATED
       LC_QUANTS=(   # OBLITERATUS's GGUFs, best first: "quant|bytes|sha256"
@@ -311,6 +320,7 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
       # Base card: thinking on, keep reasoning_content across turns (preserve_thinking defaults to true). No sampling
       # given: Qwen3.8's thinking-mode settings, as for ThinkingCap.
       LC_TITLE="feyospace-s1 OBLITERATED" LC_ALIAS=feyospace-s1-obliterated
+      LC_BLURB="Uncensored cybersecurity 27B for pentests and CTFs"
       LC_REPO=https://huggingface.co/mradermacher/feyospace-s1-OBLITERATED-GGUF/resolve/main
       LC_FILE_PREFIX=feyospace-s1-OBLITERATED LC_FILE_SEP=.
       LC_QUANTS=(   # mradermacher's GGUFs, best first: "quant|bytes|sha256"
@@ -342,6 +352,7 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
       # plus the indexer keys is an upper bound, so the fit is conservative.
       # Draft: unsloth's DSpark drafter (MIT, 8 GB). Measured on this build: code +30-45% (80-102 tok/s), prose same.
       LC_TITLE="DeepSeek V4.1 Flash OBLITERATED" LC_ALIAS=deepseek-v4.1-flash-obliterated
+      LC_BLURB="Uncensored 748B MoE, MMLU 83.6%. Experts in RAM (~126 GB)"
       LC_REPO=https://huggingface.co/HumanjavaEnterprises/DeepSeek-V4.1-Flash-1017-obliterated-upstream-GGUF/resolve/f80c4863ac39a6a7002b3a3675a7c46580f0038b
       LC_FILE_PREFIX=DeepSeek-V4.1-Flash-1017-obliterated-hjimatrix
       LC_QUANTS=("IQ2_XXS|248991528992|split")   # total of the parts below
@@ -398,6 +409,7 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
   LC_KV_Q8=$(( LC_KV_F16 * 17 / 32 ))           # q8_0 = 1 byte + a 2-byte scale per 32 values (vs 2 bytes at f16)
   local e; LC_REF_BYTES=""
   for e in "${LC_QUANTS[@]}"; do [ "${e%%|*}" = "$LC_REF_Q" ] && LC_REF_BYTES=$(echo "$e" | cut -d'|' -f2); done
+  [ -n "$LC_REF_BYTES" ] || LC_REF_BYTES=$(echo "${LC_QUANTS[0]}" | cut -d'|' -f2)   # REF_Q stopped matching: fall back to the first quant
   return 0
 }
 
@@ -456,6 +468,10 @@ OL_OVERHEAD_MB=1536                            # CUDA context + compute buffers
 # ======================================================================================================
 # Shared helpers
 # ======================================================================================================
+# --- EXIT trap: components append their cleanup to SUMMON_EXIT_CMDS (a later trap must not clobber an earlier one) ---
+SUMMON_EXIT_CMDS=""
+run_exit_cmds() { [ -n "$SUMMON_EXIT_CMDS" ] && eval "$SUMMON_EXIT_CMDS"; return 0; }
+trap run_exit_cmds EXIT
 APT_UPDATED=0
 apt_get() {   # install packages; runs apt-get update once per run first (fresh pods have no package lists)
   if (( ! APT_UPDATED )); then
@@ -515,7 +531,7 @@ choose() {   # $1 = title, $2 = text, $3 = default tag, then tag/label pairs -> 
     else printf '%2d) %-8s %s\n' "$i" "$1" "$2" >&2; fi
     shift 2
   done
-  read -rp "Choice [$n]: " c; c=${c:-$n}
+  read -rp "Choice [$n]: " c || true; c=${c:-$n}   # EOF on piped stdin: the default, not a silent death under set -e
   [[ "$c" =~ ^[0-9]+$ ]] && (( c >= 1 && c <= i )) || { echo "Invalid choice: '$c'" >&2; return 1; }
   echo "${tags[c-1]}"
 }
@@ -587,7 +603,7 @@ access_text() {   # $1 = llamacpp|ollama
   fi
   case "$ACCESS" in
     local)  echo "local: only this computer (127.0.0.1). Share it with ALLOW_IP=<ip> or ALLOW_IP=any" ;;
-    locked) echo "locked to ${ALLOW_IP:-your SSH IP ${SSH_CLIENT%% *}}" ;;
+    locked) echo "locked to ${ALLOW_IP:-your SSH IP ${SSH_CLIENT:-${SSH_CONNECTION%% *}}}" ;;
     open)   echo "OPEN to anyone who can reach this machine (ALLOW_IP=any)" ;;
   esac
 }
@@ -719,7 +735,11 @@ stop_ollama() { screen -S ollama -X quit 2>/dev/null || true; unlock INPUT; }
 wait_port_free() {   # after stopping our servers: give them 5 s to let go, then refuse a port someone else holds
   local i
   for i in 1 2 3 4 5; do curl -s --max-time 1 -o /dev/null "http://127.0.0.1:$PORT" || return 0; sleep 1; done
-  echo "Port $PORT is already in use by another server. Pick another port: $0 <port>"; exit 1
+  # curl proves an HTTP holder; ss names any other kind of listener on the port
+  local holder; holder=$(ss -ltn 2>/dev/null | awk -v p=":$PORT" '$4 ~ p"$" {print $4; exit}')
+  [ -n "$holder" ] && echo "Port $PORT is already in use (listening: $holder). Pick another port: $0 <port>" \
+    || echo "Port $PORT is already in use by another server. Pick another port: $0 <port>"
+  exit 1
 }
 
 # ======================================================================================================
@@ -744,15 +764,24 @@ while (( $# )); do
   shift
 done
 if [ -n "$PORT" ]; then
-  [[ "$PORT" =~ ^[0-9]+$ ]] && (( PORT >= 1 && PORT <= 65535 )) || { echo "Invalid port: '$PORT'"; exit 1; }
+  # 10#: a leading zero ("08001") would be parsed as (invalid) octal by the arithmetic below
+  [[ "$PORT" =~ ^[0-9]+$ ]] && PORT=$((10#$PORT)) && (( PORT >= 1 && PORT <= 65535 )) || { echo "Invalid port: '$PORT'"; exit 1; }
 fi
 
-# --- Re-lock only: no restart ---
+# --- Re-lock only: no restart. Locking needs no running server (Ollama's screen session dies on a reboot): ---
+# --- --lock PORT works standalone (host mode); a matching llama.cpp container switches the rule to DOCKER-USER. ---
 if [ "$ACTION" = lock ]; then
   MODE=""
-  if lc_running && { [ -z "$PORT" ] || [ "$(lc_port)" = "$PORT" ]; }; then MODE=docker; PORT=${PORT:-$(lc_port)}
-  elif ol_running; then MODE=host; PORT=${PORT:-$(ol_port)}; fi
-  [ -n "$MODE" ] && [[ "$PORT" =~ ^[0-9]+$ ]] || { echo "No running server found; start one first, or pass the port: $0 --lock PORT"; exit 1; }
+  if [ -n "$PORT" ]; then
+    MODE=host
+    if lc_running && [ "$(lc_port)" = "$PORT" ]; then MODE=docker; fi
+  elif lc_running; then MODE=docker; PORT=$(lc_port)
+  elif ol_running; then MODE=host; PORT=$(ol_port); fi
+  [ -n "$MODE" ] || { echo "No running server found, and no port passed: $0 --lock PORT"; exit 1; }
+  if (( DRY_RUN )); then
+    echo "DRY RUN: would lock port $PORT to your IP ($MODE mode). Nothing done."
+    exit 0
+  fi
   lock_port "$PORT" "$MODE"
   exit 0
 fi
@@ -820,7 +849,7 @@ lc_file() {   # $1 = quant -> the file llama-server opens (a split GGUF's first 
 # weight bytes, ctx, kv bytes/token -> GPU MB (+ LoRA/draft), without the host-only share (LC_HOST_PCT)
 nb_need_mb() { echo $(( ($1 * (100 - LC_HOST_PCT) / 100 + LC_EXTRA_BYTES) / 1048576 + $2 * $3 / 1048576 )); }
 kv_bytes() { if [ "${1%+ram}" = f16 ]; then echo "$LC_KV_F16"; else echo "$LC_KV_Q8"; fi; }   # "q8_0+ram" -> q8_0
-MOE_MIN_CACHE_PCT=60                           # the GPU expert cache must hold >= 60% of the experts (few RAM reads)
+MOE_MIN_CACHE_PCT=55                           # the GPU expert cache must hold >= 55% of the experts (few RAM reads; 55% accepts the vendor's DeepSeek 128K recipe, ~64%)
 ram_gpu_mb() {   # MoE with experts in RAM: GPU MB for the non-expert weights + extras + cache (no expert cache)
   echo $(( $1 * (100 - LC_EXPERT_PCT - LC_HOST_PCT) / 100 / 1048576 + LC_EXTRA_BYTES / 1048576 + $2 * $(kv_bytes "$3") / 1048576 ))
 }
@@ -841,8 +870,8 @@ draft_auto() {   # $1 = model id -> sets DRAFT=on/off when unset: on if it doesn
 lc_budget() { LC_BUDGET_MB=$(( FREE_MB - LC_OVERHEAD_MB - (GPU_COUNT - 1) * 1024 )); }   # llama.cpp splits layers over all cards
 fit_kv() {   # $1 = weight bytes, $2 = ctx -> most precise cache that fits (f16, then q8_0), or nothing.
   # MoE models that don't fit try the experts-in-RAM tier ("f16+ram"/"q8_0+ram"): the non-expert weights, the
-  # cache and an expert cache holding >= 60% of the experts on the GPU, all routed experts in system RAM (+4 GB).
-  # The 60% rule keeps most expert reads on the GPU, so it favours smaller weights over slow RAM traffic.
+  # cache and an expert cache holding >= 55% of the experts on the GPU, all routed experts in system RAM (+4 GB).
+  # The 55% rule keeps most expert reads on the GPU; 60% rejected the vendor's 96 GB + 130 GB DeepSeek recipe.
   local kv
   for kv in f16 q8_0; do
     if (( $(nb_need_mb "$1" "$2" "$(kv_bytes $kv)") <= LC_BUDGET_MB )); then echo "$kv"; return 0; fi
@@ -880,7 +909,7 @@ ask_port() {   # the last question: which port to serve on (skipped when given a
     read -rp "Port for the AI endpoint on this machine [20001]: " PORT || true   # no terminal: the default
     PORT=${PORT:-20001}
   fi
-  [[ "$PORT" =~ ^[0-9]+$ ]] && (( PORT >= 1 && PORT <= 65535 )) || { echo "Invalid port: '$PORT'"; exit 1; }
+  [[ "$PORT" =~ ^[0-9]+$ ]] && PORT=$((10#$PORT)) && (( PORT >= 1 && PORT <= 65535 )) || { echo "Invalid port: '$PORT'"; exit 1; }
 }
 
 # --- Ollama: sizes and fit for every model in OL_MODELS (registry lookups, no installs) ---
@@ -900,7 +929,7 @@ confirm_yesno() {   # $1 = question (may contain \n); returns 0 for yes
   if (( HAS_WHIPTAIL )); then
     whiptail --backtitle "$BACKTITLE" --title "Won't fit in VRAM" --yesno "$1" 16 78
   else
-    printf '%b\n' "$1"; read -rp "[y/N] " a; [[ $a == [yY]* ]]
+    printf '%b\n' "$1"; read -rp "[y/N] " a || true; [[ $a == [yY]* ]]
   fi
 }
 
@@ -923,7 +952,8 @@ ol_prepare() {   # sets KV_TYPE/KV_PCT/QUANT_ORDER, the per-model arrays (REF, Q
 
   # --- Sizes: look every ref up in parallel (~0.5 s per registry call), then pick per model what fits ---
   echo "Checking Ollama model sizes..."
-  SIZE_DIR=$(mktemp -d); trap 'rm -rf "$SIZE_DIR"' EXIT
+  SIZE_DIR=$(mktemp -d)   # cleanup appends to the shared EXIT trap, so it can't clobber an earlier handler
+  SUMMON_EXIT_CMDS="${SUMMON_EXIT_CMDS:+$SUMMON_EXIT_CMDS; }rm -rf \"$SIZE_DIR\""
   local e r r8 r4 rk kv fx cp n note i s8 s4 q c s opt
   for e in "${OL_MODELS[@]}"; do
     IFS='|' read -r _ r8 r4 _ <<< "$e"
@@ -1043,24 +1073,16 @@ if [ -z "${ENGINE:-}" ] || { [ "$ENGINE" = ollama ] && [ -z "${ONLY:-}" ]; }; th
     [ -n "$q" ] || { LC_HIDDEN+=("$LC_TITLE"); continue; }   # doesn't fit this machine: not offered
     if [[ $kv == *+ram ]]; then fit="$q +RAM@$((c/1024))K"
     else fit="$q ~$(( ($(nb_need_mb "$b" "$c" "$(kv_bytes "$kv")") + LC_OVERHEAD_MB) / 1024 ))G@$((c/1024))K"; fi
-    case "$id" in   # the model's own summary (model card), shortened
-      nanbeige) blurb="Lightweight agent for coding and research. AA index 20" ;;
-      qwen38pi) blurb="Qwen3.8 + RL-tuned LoRA for the pi agent. No thinking" ;;
-      ornith35b) blurb="Self-improving MoE for coding agents. 3B active, fast" ;;
-      ornith9b) blurb="Self-improving 9B: light, fast, 256K on 24 GB cards" ;;
-      thinkingcap) blurb="Qwen3.8 that thinks 37% less, MTP on. PolyForm SB" ;;
-      qwen38obl) blurb="Uncensored Qwen3.8 (abliterated V3), MMLU -2.1pp. No thinking" ;;
-      ornith9bobl) blurb="Uncensored Ornith 9B (abliterated), MMLU -4pp. No thinking" ;;
-      feyospace) blurb="Uncensored cybersecurity 27B for pentests and CTFs" ;;
-      deepseek41obl) blurb="Uncensored 748B MoE, MMLU 83.6%. Experts in RAM (~126 GB)" ;;
-    esac
-    LC_ITEMS+=("$id" "$(row "$LC_TITLE" "$fit" "$blurb")")
+    LC_ITEMS+=("$id" "$(row "$LC_TITLE" "$fit" "$LC_BLURB")")   # blurb from lc_model: can't drift from the id list
   done
   DRAFT=$DRAFT_USER
   for i in "${!RANKS[@]}"; do
     if (( MCTX[i] == 0 )); then OL_HIDDEN+=("${MNAME[i]}"); continue; fi   # too big even at 64K: not offered
     OL_ITEMS+=("ol:$((i+1))" "$(row "${MNAME[i]}" "$(fit_label $i)" "${NOTE[i]}")")
   done
+  if [ "$ENGINE" = ollama ] && (( ${#OL_ITEMS[@]} == 0 )); then
+    echo "ENGINE=ollama: no Ollama model fits this machine ($((FREE_MB/1024)) GB VRAM, $((AVAIL_RAM_MB/1024)) GB free RAM); the menu would only offer llama.cpp."; exit 1
+  fi
   if (( ${#LC_ITEMS[@]} + ${#OL_ITEMS[@]} == 0 )); then
     echo "No model fits this machine ($((FREE_MB/1024)) GB VRAM, $((AVAIL_RAM_MB/1024)) GB free RAM)."; exit 1
   fi
@@ -1126,6 +1148,15 @@ fetch_gguf() {   # $1 = repo URL, $2 = file, $3 = bytes, $4 = sha256 -> $DDIR/mo
       echo "Reusing the completed download $PART"
     else
       local NEED_MB FREE_DISK_MB RETRY
+      # A .part the server already considers complete makes the resume fail opaquely (curl 33 / HTTP 416):
+      # detect it with a ranged HEAD, then delete and restart.
+      if [ -f "$PART" ]; then
+        local CODE; CODE=$(curl -sIL -o /dev/null -w '%{http_code}' -H "Range: bytes=$(part_size)-" --connect-timeout 10 --max-time 30 "$URL/$FILE" 2>/dev/null) || true
+        if [ "$CODE" = 416 ]; then
+          echo "The server has a complete copy of $FILE (partial is $(part_size) bytes); restarting the download."
+          rm -f "$PART"
+        fi
+      fi
       NEED_MB=$(( (BYTES - $(part_size)) / 1048576 + 1024 ))
       FREE_DISK_MB=$(df -Pm "$DDIR/models" | awk 'NR==2 {print $4}')
       if [ -n "$FREE_DISK_MB" ] && (( FREE_DISK_MB < NEED_MB )); then
@@ -1471,7 +1502,8 @@ install_llamacpp() {
   local AVAIL_MB CACHE_RAM_MB SERVER_ARGS
   AVAIL_MB=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
   (( EXPERTS_RAM )) && AVAIL_MB=$(( AVAIL_MB - BYTES * LC_EXPERT_PCT / 100 / 1048576 ))
-  CACHE_RAM_MB=$(( AVAIL_MB / 2 )); (( CACHE_RAM_MB < 8192 )) && CACHE_RAM_MB=8192
+  # Floor: a quarter of the free RAM (a fixed 8 GB would exceed free RAM on small boxes, or lie after the MoE deduction)
+  CACHE_RAM_MB=$(( AVAIL_MB / 2 )); (( CACHE_RAM_MB < AVAIL_MB / 4 )) && CACHE_RAM_MB=$(( AVAIL_MB / 4 ))
   # --metrics: Prometheus-format stats at /metrics (tokens/s, prompt and decode counts, draft acceptance, KV use).
   # Same port and access rules as the API: local mode / your IP only.
   SERVER_ARGS=(--cache-ram "$CACHE_RAM_MB" --metrics)
@@ -1499,7 +1531,10 @@ install_llamacpp() {
       esac
       SERVER_ARGS+=(-ctkd "$KV_TYPE_SEL" -ctvd "$KV_TYPE_SEL")
     fi
-    SERVER_ARGS+=(--spec-type "$SPEC_TYPES" --spec-ngram-mod-n-match 24 --spec-ngram-mod-n-min 16 --spec-ngram-mod-n-max 48)
+    SERVER_ARGS+=(--spec-type "$SPEC_TYPES")
+    if [[ $SPEC_TYPES == *ngram-mod* ]]; then   # dspark's SPEC_TYPES has no ngram-mod: n-gram drafts added nothing on top of it
+      SERVER_ARGS+=(--spec-ngram-mod-n-match 24 --spec-ngram-mod-n-min 16 --spec-ngram-mod-n-max 48)
+    fi
   fi
   # MoE experts in system RAM: --cpu-moe keeps all routed experts on the CPU side, --moe-cache-mib caches the hot
   # ones on the GPU (llama.cpp leaves that cache off by default, which roughly halves throughput).
@@ -1596,6 +1631,8 @@ install_ollama() {
   elif (( REC >= 0 )); then
     SEL=("$REC")
   fi
+  (( ${#SEL[@]} )) || { echo "No Ollama model fits this machine ($((FREE_MB/1024)) GB VRAM, $((AVAIL_RAM_MB/1024)) GB free RAM); starting an empty server would be pointless."; exit 1; }
+  (( REC >= 0 )) && echo "$REC_TXT"
   echo "Ollama: $QUANT_ORDER, $KV_TYPE KV cache. Pulling: $(for i in "${SEL[@]}"; do printf '%s ' "${MNAME[i]}"; done)"
 
   # Warn if anything selected won't fit even at Q4 @64K
@@ -1643,6 +1680,7 @@ install_ollama() {
       else
         printf 'FROM %s\nPARAMETER num_ctx %s\n' "${REF[i]}" $OL_CTX_MIN > /tmp/Modelfile.ctx
         OLLAMA_HOST=127.0.0.1:$PORT ollama create "${REF[i]}" -f /tmp/Modelfile.ctx
+        rm -f /tmp/Modelfile.ctx
         echo "${REF[i]}: context set to 64K"
       fi
     fi

@@ -1,7 +1,16 @@
 # Changelog
 
-## Unreleased
+## v1.2.0 (2026-11-20)
 
+- **Logic-precision fixes (full-script audit).**
+  - `--lock` works with no server running (Ollama's screen session dies on a reboot): `./summon.sh --lock PORT` defaults to host mode; a llama.cpp container on that port still locks via DOCKER-USER. `--dry-run --lock` now previews instead of locking.
+  - `ENGINE=ollama` on a card where no Ollama model fits now errors out instead of silently running a llama.cpp model; Ollama also never starts with zero models.
+  - MoE GPU expert-cache threshold 60% -> 55%: the vendor's DeepSeek V4.1 recipe (96 GB card + ~130 GB RAM) is now offered at 128K (was capped at 64K).
+  - DSpark no longer receives `--spec-ngram-mod-*` flags (its makers measured no gain from them).
+  - The host-RAM prompt-cache floor is a quarter of free RAM instead of a fixed 8 GB (which could exceed free RAM after the MoE-expert deduction).
+  - Resume: a `.part` the server already considers complete (HTTP 416) is detected with a ranged HEAD and restarted, instead of an opaque curl 33.
+  - Leading-zero ports (`08001`) are accepted and normalized; `read` in the plain-text menu/confirm fallbacks no longer dies under `set -e` on piped stdin.
+  - Small: menu descriptions live in the model definitions (`LC_BLURB`, can't drift from the id list), the Ollama plan prints the recommendation, the "locked" access line falls back to `SSH_CONNECTION`, the speed-reference quant falls back to the first quant's size, `/tmp/Modelfile.ctx` is removed after use, the EXIT trap is append-only, and the busy-port error names the listener (`ss -ltn`).
 - **API keys instead of IP locking (llama.cpp).** A key is generated once, kept in the data folder across reruns and model switches, and passed to llama-server as a file (`--api-key-file`, so it never shows in `docker inspect`). Rented pods no longer break when your IP changes or the provider NATs traffic. `API_KEY=...` sets your own, `API_KEY=none` restores IP locking, `--new-key` rotates it, `ALLOW_IP` adds a firewall on top. Ollama models keep the IP lock (Ollama has no keys).
 - **`TUNNEL=1`:** a free public HTTPS URL through a Cloudflare quick tunnel (`cloudflare/cloudflared:2026.11.1`). The raw port then only listens on 127.0.0.1. Cursor needs this.
 - **Connect your tools.** The Done screen prints llama-server's browser chat page, the key, and copy-paste setup for Hermes Agent, pi, opencode, OpenClaw and Cursor with the real URL, model, key and context filled in. `./summon.sh --connect` prints it again (it also picks up a restarted tunnel's new URL).
