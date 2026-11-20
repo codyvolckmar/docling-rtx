@@ -2,42 +2,79 @@
 # Summon - AI, Open-source, Private Intelligence. One-shot setup that turns an NVIDIA GPU (rented pod or your
 # own PC) into a private, OpenAI-compatible AI endpoint: picks the model, weights and context that fit the card,
 # verifies the download, keeps the port private and tests tool calling before handing you the URL.
-#   llama.cpp (llama-server in Docker), tuned per model:
-#     Nanbeige 4.3 33B  - the agentic-coding daily driver (48 GB cards: 128-256K)
-#     Qwen3.8 27B pi    - Qwen3.8 27B + a LoRA RL-tuned to drive the pi coding agent (thinking off); vendor-tested
-#     Ornith 1.5 35B    - fast MoE (3B active), 256K with 8-bit weights on 48 GB; vendor benchmarks only
-#     Ornith 1.5 9B     - fast and light: 256K with 8-bit weights on a 24 GB card (RTX 3090/4090)
-#     ThinkingCap 27B   - Qwen3.8 27B that thinks ~37% less, with its built-in MTP head (PolyForm Small Business)
-#     Uncensored (OBLITERATUS abliterations, refusals removed; never the default):
-#       Qwen3.8 27B OBLITERATED, Ornith 1.5 9B OBLITERATED, feyospace-s1 OBLITERATED (cybersecurity 27B)
-#   Ollama: a ranked menu of other open models (Qwen3.8 27B, Qwen3.6 35B-A3B, Gemma 4 ...), swapped on demand.
-# One engine runs at a time: starting one stops the other (they would fight over VRAM and the port).
 #
-#   ./summon.sh [PORT]                       one menu with every model (llama.cpp + Ollama), then context/weights
-#   ./summon.sh nanbeige|qwen38pi|ornith35b|ornith9b|thinkingcap|qwen38obl|ornith9bobl|feyospace|deepseek41obl [PORT]
-#                                            skip the menu (same as ENGINE=...)
-#   ./summon.sh ollama [PORT]                the menu, with the recommended Ollama model pre-selected
-#   ./summon.sh --dry-run [PORT]             the whole wizard, then print the plan: installs and downloads nothing
-#                                            SUMMON_GPU="RTX 3090:24576[:cards]" previews another machine (dry runs only)
-#   ./summon.sh --lock [PORT]                re-lock the port to your current IP (new home IP / after a reboot)
+# HOW IT WORKS
+#   1. Detect   GPUs (VRAM summed over all cards), free RAM and whether you're on SSH (rented pod) or local.
+#   2. Choose   One menu lists only the models that fit this machine; the rest are named on one line.
+#               Then context (step 1) and weights (step 2): context first, then the most precise weights that
+#               fit. Each model's draft for speculative decoding is switched on if it costs no precision.
+#   3. Fetch    Docker + NVIDIA container toolkit if missing, then the model from Hugging Face: resumable, exact
+#               byte count and GGUF header checked (full sha256 with --verify), split models file by file.
+#   4. Serve    llama-server in Docker (container "summon"): every layer on the GPU (it fails loudly rather than
+#               crawl on the CPU), or MoE experts in RAM with the hot ones cached on the GPU ("+RAM" in the
+#               menu); each model's own chat template or a pinned fixed one; host-RAM prompt cache; /metrics.
+#               Ollama models instead install Ollama (no Docker), pull the model and serve it with its context set.
+#   5. Lock     Port firewalled to your SSH IP (rented pods) or bound to 127.0.0.1 (your own PC).
+#   6. Test     A tool call must come back as an OpenAI tool_calls entry. Then it prints the URL, model name and
+#               the context window to set in your client.
+#   One engine runs at a time: starting one stops the other (they would fight over VRAM and the port).
+#   Rerunning is cheap: downloaded models are kept, so switching models or settings only restarts the server.
+#
+# MODELS
+#   llama.cpp, tuned per model (id in brackets):
+#     Nanbeige 4.3 33B [nanbeige]      the agentic-coding daily driver (48 GB cards: 128-256K)
+#     Qwen3.8 27B pi [qwen38pi]        Qwen3.8 27B + a LoRA RL-tuned to drive the pi coding agent (thinking off)
+#     Ornith 1.5 35B [ornith35b]       fast MoE (3B active), 256K with 8-bit weights on 48 GB
+#     Ornith 1.5 9B [ornith9b]         fast and light: 256K with 8-bit weights on a 24 GB card
+#     ThinkingCap 27B [thinkingcap]    Qwen3.8 27B that thinks ~37% less, built-in MTP head (PolyForm Small Business)
+#     Uncensored (OBLITERATUS abliterations; never pre-selected), see OBLITERATUS.md:
+#       [qwen38obl] Qwen3.8 27B  [ornith9bobl] Ornith 1.5 9B  [feyospace] feyospace-s1 (cybersecurity ~28B)
+#       [deepseek41obl] DeepSeek V4.1 Flash 748B MoE (96 GB card + ~130 GB RAM, or ~160 GB VRAM across cards)
+#   Ollama: a ranked list of other open models (Qwen3.8 27B, Qwen3.6 35B-A3B, Gemma 4 ...), sized to the card.
+#
+# COMMANDS
+#   ./summon.sh [PORT]                    the wizard: one menu with every model that fits, then context/weights
+#   ./summon.sh MODEL_ID [PORT]           skip the model menu, e.g. ./summon.sh thinkingcap 20000 (= ENGINE=...)
+#   ./summon.sh ollama [PORT]             the menu, with the recommended Ollama model pre-selected
+#   ./summon.sh --dry-run [PORT]          the whole wizard, then print the plan: installs and downloads nothing
+#   ./summon.sh --verify ...              also hash the whole model file with sha256 (slow)
+#   ./summon.sh --lock [PORT]             re-lock the port to your current IP (new home IP, after a reboot)
 #   ./summon.sh --uninstall [llamacpp|ollama] [-y]   remove one engine (or both) and its model files
-#   ./summon.sh --help | --version           this text / the version
-# Access: over SSH (rented pods) the port is locked to the IP you SSH in from. On your own PC (no SSH session)
-# the server only listens on 127.0.0.1. ALLOW_IP=1.2.3.4,5.6.7.0/24 shares it with those, ALLOW_IP=any opens it.
+#   ./summon.sh --help | --version        this text / the version
+#   The one-line installer saves this script as ~/.summon/summon.sh: rerun that for every command above.
 #
-# llama.cpp options (Nanbeige, Qwen3.8 pi, Ornith):
-#   CTX=131072 QUANT=Q6_K          skip the context / weights menus (either one skips its step)
-#   VERIFY_SHA256=1 or --verify    also hash the whole model file (slow; off by default)
-#   THINK_BUDGET=4096 TEMPERATURE=0.6 TOP_P=0.95 TOP_K=20   cap thinking / server sampling defaults
-#   DRAFT=off                      no draft model (MTP head / Nanbeige4.1-3B); asked interactively otherwise
-#   SPEC=off                       no speculative decoding at all (draft model + n-gram), for reproducible runs
-# MoE models (Ornith 35B) that don't fit VRAM run with their experts in system RAM and the hot ones cached on
-# the GPU (--cpu-moe + --moe-cache-mib): menus mark this "+RAM". Speculation keeps quality on average but isn't
-# bit-identical: verifying a batch of drafted tokens changes float rounding, so near-tied tokens can flip.
-# Ollama options:
-#   ONLY=1,3                       skip the menu, pull these Ollama models (1 = Qwen3.8 27B ... in list order)
-#   FAST=1                         try Q4 before Q8 (~1.7x decode speed, ~11 GB less VRAM)
-#   OLLAMA_KV_CACHE_TYPE=q8_0      halve K/V memory (global: affects every model)
+# OPTIONS (environment variables, put them before the command; they skip the matching menu step)
+#   Access
+#     ALLOW_IP=1.2.3.4,5.6.7.0/24   share the port with these addresses (default: your SSH IP, or 127.0.0.1 only)
+#     ALLOW_IP=any                  open the port to everyone (only on a trusted network)
+#   llama.cpp models
+#     CTX=131072                    context window in tokens (skips step 1)
+#     QUANT=Q8_0                    weights, e.g. Q8_0 Q6_K Q4_K_M IQ4_XS (skips step 2; must fit at CTX)
+#     DRAFT=on|off                  the model's draft (MTP head, draft model or DSpark): on/off up front
+#     SPEC=off                      no speculative decoding at all (no draft, no n-gram): reproducible runs and
+#                                   speed baselines
+#     THINK_BUDGET=4096             cap thinking tokens per answer
+#     TEMPERATURE=0.6 TOP_P=0.95 TOP_K=20   server sampling defaults (clients can still override per request)
+#     VERIFY_SHA256=1               same as --verify
+#   Ollama models
+#     ONLY=1,3                      skip the menu, pull these rows (1 = Qwen3.8 27B ... in list order)
+#     FAST=1                        try Q4 before Q8 (~1.7x decode speed, ~11 GB less VRAM)
+#     OLLAMA_KV_CACHE_TYPE=q8_0     halve K/V memory (global: affects every model); q4_0 quarters it
+#     OLLAMA_KEEP_ALIVE=10m         unload an idle model after 10 min (default: keep it loaded)
+#   Dry-run previews
+#     SUMMON_GPU="RTX 3090:24576"   pretend this card is installed; "H100:81559:2" = two of them
+#     SUMMON_RAM=262144             pretend this much free RAM (MB), for models with experts in RAM
+#
+# EXAMPLES
+#   CTX=131072 QUANT=Q8_0 ./summon.sh thinkingcap 20000      no menus: ThinkingCap, 128K, 8-bit weights
+#   SPEC=off CTX=131072 QUANT=Q8_0 ./summon.sh thinkingcap 20000   same without speculation (speed baseline)
+#   SUMMON_GPU="RTX PRO 6000:97887" SUMMON_RAM=262144 ./summon.sh --dry-run deepseek41obl   would DeepSeek fit?
+#   ALLOW_IP=203.0.113.7 ./summon.sh nanbeige 20000          serve Nanbeige to one extra address
+#
+# NOTES
+#   Speculative decoding keeps quality on average but isn't bit-identical: verifying a batch of drafted tokens
+#   changes float rounding, so near-tied tokens can flip. Use SPEC=off when you need reproducible outputs.
+#   Logs: docker logs -f summon. Speed and draft acceptance: http://<host>:PORT/metrics.
 set -e
 export DEBIAN_FRONTEND=noninteractive
 SUMMON_VERSION=1.1.0
