@@ -72,6 +72,21 @@ Then point any OpenAI-compatible client at `http://localhost:PORT/v1` (rented po
 - **Speculative decoding** (v1.1.0): each model's draft plus n-gram drafts. Qwen3.8 uses its MTP head (+60-90% measured on base Qwen3.8), Ornith and ThinkingCap their built-in MTP layer (ThinkingCap: ~1.3x, measured by its makers), Nanbeige the optional Nanbeige4.1-3B draft model (~70% faster decoding, ~3x faster tool calls, community-measured). A draft that would cost weight precision on your card is offered, never forced. The model checks every drafted token, so quality holds on average, but outputs aren't bit-identical to a run without it: `SPEC=off` for reproducible runs.
 - **MoE experts in system RAM** (v1.1.0): a mixture-of-experts model that doesn't fit VRAM (Ornith 35B on a 24 GB card) keeps its experts in RAM and caches the hot ones on the GPU (llama.cpp `--cpu-moe` + `--moe-cache-mib`), shown as `+RAM` in the menu. Summon only offers it when the GPU cache holds at least 60% of the experts, and never pre-selects it.
 
+## Tested on real hardware
+
+**ThinkingCap Qwen3.8 27B on an NVIDIA L40 (48 GB)**, installed with the one-line installer. It ran Q8_0 weights at 128K context with an f16 cache, using the built-in MTP layer plus n-gram drafts for speculative decoding. The tool-call test passed.
+
+| Request | Prompt | Generated | Decode | Draft acceptance |
+|---|---|---|---|---|
+| Short | 316 tokens | 46 tokens | **56.6 tok/s** | 82% (mean 3.46 tokens per step) |
+| Long | 34,748 tokens at 1,646 tok/s | 2,235 tokens | **41.5 tok/s** | 49% (mean 2.48 tokens per step) |
+
+The acceptance rates show speculative decoding is working: the model accepts about half of the drafted tokens even on a 35K-token context. No baseline with speculation off was recorded, so the exact speed-up on this card is still unmeasured.
+
+| | |
+|---|---|
+| ![Summon installing and serving ThinkingCap on an L40](docs/img/12-l40-thinkingcap-install.png) | ![llama-server timings: ~42 tok/s decode with MTP drafts](docs/img/13-l40-thinkingcap-speed.png) |
+
 ## Screenshots
 
 | | |
@@ -84,7 +99,7 @@ Regenerate them with `python3 tools/termshot.py` (drives the real script in a ps
 
 ## Status
 
-Young project, [MIT licensed](LICENSE). The Nanbeige llama.cpp setup has served real agent work on rented RTX A6000 pods. The full wizard, the Windows/WSL path and the Ornith models have only been tested with dry runs and simulated GPUs so far. Ornith's benchmarks are the vendor's own. Issues and pull requests welcome.
+Young project, [MIT licensed](LICENSE). The Nanbeige llama.cpp setup has served real agent work on rented RTX A6000 pods, and ThinkingCap 27B has been run end to end on an L40 ([results](#tested-on-real-hardware)). The full wizard, the Windows/WSL path and the Ornith models have only been tested with dry runs and simulated GPUs so far. Ornith's benchmarks are the vendor's own. Issues and pull requests welcome.
 
 Models belong to their creators and carry their own licences: Nanbeige (Apache-2.0), Ornith (MIT), Ollama models as listed.
 
