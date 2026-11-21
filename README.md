@@ -40,6 +40,7 @@ Piping a script into a shell gives it root. Read [summon.sh](summon.sh) first; i
 | **Ornith 1.5 35B**: fast MoE, ~3B active (vendor benchmarks) | llama.cpp | 128K with experts in RAM (needs ~30 GB free RAM) | 256K, 8-bit weights |
 | **Ornith 1.5 9B**: fast and light (vendor benchmarks) | llama.cpp | 256K, 8-bit weights | 256K, 8-bit weights |
 | **ThinkingCap Qwen3.8 27B**: Qwen3.8 27B that thinks ~37% less (vendor: -0.86 pts), built-in MTP head. PolyForm Small Business licence | llama.cpp | 128K, IQ4_XS | 128K, 8-bit weights |
+| **Ternary Bonsai 2 27B**: Qwen3.8 27B in ternary weights, 7.6 GB (vendor: 98% of FP16 across 14 benchmarks). Runs on 16 GB cards at 128K | llama.cpp | 256K (q8_0 cache) | 256K (f16 cache) |
 | **Qwen3.8 27B OBLITERATED**: uncensored Qwen3.8 (OBLITERATUS V3 abliteration; vendor MMLU -2.1pp), thinking off, served with Qwen3.8's own template so tool calls work | llama.cpp | 128K, Q4_K_M | 256K, 8-bit weights |
 | **Ornith 1.5 9B OBLITERATED**: uncensored Ornith 9B (vendor MMLU -4pp), thinking off | llama.cpp | 256K, 8-bit weights | 256K, 8-bit weights |
 | **feyospace-s1 OBLITERATED**: uncensored ~28B tuned for cybersecurity (pentests, CTFs, vuln research; vendor WMDP-Cyber 63.8%). Isolate its tools | llama.cpp | 128K, Q4_K_M | 256K, 8-bit weights |
@@ -50,7 +51,8 @@ Piping a script into a shell gives it root. Read [summon.sh](summon.sh) first; i
 
 | GPU (VRAM) | Lium price per hour | What Summon runs on it |
 |---|---|---|
-| RTX 3090 / 4090 (24 GB) | $0.15–0.64 (3090), $0.35–0.55 (4090) | Ornith 1.5 9B at 128K, 8-bit. ThinkingCap / Qwen3.8 27B at 128K, 4-bit. Ornith 35B with experts in RAM |
+| RTX 4060 Ti / 5060 Ti / 5070 Ti (16 GB) | $0.12–0.30 | Ternary Bonsai 2 27B at 128K (the only 27B that fits). 12 GB cards are not offered |
+| RTX 3090 / 4090 (24 GB) | $0.15–0.64 (3090), $0.35–0.55 (4090) | Ornith 1.5 9B at 128K, 8-bit. Ternary Bonsai 2 27B at 256K. ThinkingCap / Qwen3.8 27B at 128K, 4-bit. Ornith 35B with experts in RAM |
 | **L40 / L40S / RTX A6000 (48 GB)** | **$0.33 (L40), $0.38 (L40S)**, $0.42–0.67 (A6000) | **Best value.** Nanbeige 33B at 128K, 6-bit; ThinkingCap, Qwen3.8, Ornith 35B at 128K, 8-bit (~42 tok/s measured on an L40) |
 | RTX PRO 6000 Blackwell (96 GB) | $1.60–1.99 | Every 27–35B model at 256K, 8-bit; Nanbeige up to 384K at 8-bit (512K at 3-bit). DeepSeek V4.1 Flash 748B too, if the pod has ~130 GB free RAM (experts in RAM) |
 
@@ -118,6 +120,25 @@ The acceptance rates show speculative decoding is working: the model accepts abo
 | 8K tokens | 958 tok/s | 8 s | 45–62 tok/s | found / found / found |
 | 32K tokens | 783 tok/s | 40 s | 26–37 tok/s | found / found / found |
 | 127K tokens | 448 tok/s | 4.7 min | 14–19 tok/s | found / found / not run |
+
+Prefill is compute-bound here: the card sat at 100% use and its 300 W power limit. A larger prompt batch (`-ub 2048 -b 2048`, +1.7 GB VRAM) gave 8–10% faster prefill (1,056 / 851 / 483 tok/s at 8K / 32K / 127K) with no decode loss. A 239K-token prompt took 12.2 minutes to prefill at 325 tok/s, then decoded at 8.8 tok/s, and the needle was still found.
+
+**Ternary Bonsai 2 27B on the same A100**, installed with `./summon.sh bonsai27b` on stock llama.cpp: Q2_0 weights (7.6 GB), a 256K context with an f16 cache (24.4 GB of VRAM in use), and n-gram drafts. The tool-call test passed.
+
+| Workload (thinking off, median of 2) | Decode | Draft acceptance |
+|---|---|---|
+| Prose | **65.5 tok/s** | 0% |
+| New code | **66.5 tok/s** | 28% |
+| Rewriting an existing file | **441 tok/s** | 100% |
+
+| Prompt | Prefill | Time to first token | Decode | Needle at 50% depth |
+|---|---|---|---|---|
+| 8K tokens | 1,329 tok/s | 7 s | 64 tok/s | found |
+| 32K tokens | 1,288 tok/s | 27 s | 59 tok/s | found |
+| 131K tokens | 998 tok/s | 2.2 min | 47 tok/s | found |
+| 247K tokens | 782 tok/s | 5.4 min | 39 tok/s | found |
+
+Coherence, with thinking on: 24 of 24 graded runs passed, the same tasks as Nanbeige. A 2,040-word essay had no repeated passages. Next to Nanbeige on this card it answers about twice as fast, and its lead grows with the prompt: only 16 of its 64 layers keep a cache.
 
 Coherence, with thinking on: it passed all 24 graded runs (12 tasks, twice each). The tasks were math, logic, two coding tasks checked against tests, strict JSON, an exact output format, a tool call, answering from a tool result, multi-turn recall, and saying so when a fact can't be known. In an earlier quick pass it missed the number-theory sum once and returned an empty answer after a tool result once. A 3,478-word essay had 99.3% distinct 4-grams and no repeated passages.
 
