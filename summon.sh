@@ -25,7 +25,7 @@
 #
 # MODELS
 #   llama.cpp, tuned per model (id in brackets):
-#     Nanbeige 4.3 33B [nanbeige]      the agentic-coding daily driver (48 GB cards: 128-256K)
+#     Nanbeige 4.3 33B [nanbeige]      the agentic-coding daily driver (48 GB cards: 128-256K; trained for 512K)
 #     Qwen3.8 27B pi [qwen38pi]        Qwen3.8 27B + a LoRA RL-tuned to drive the pi coding agent (thinking off)
 #     Ornith 1.5 35B [ornith35b]       fast MoE (3B active), 256K with 8-bit weights on 48 GB
 #     Ornith 1.5 9B [ornith9b]         fast and light: 256K with 8-bit weights on a 24 GB card
@@ -61,7 +61,8 @@
 #     ALLOW_IP=any                  your own PC: listen on all interfaces (default there: 127.0.0.1 only)
 #     PUBLIC_HOST=gpu.example.com   the address to print in client setup (default: public IP via api.ipify.org)
 #   llama.cpp models
-#     CTX=131072                    context window in tokens (skips step 1)
+#     CTX=131072                    context window in tokens (skips step 1). At most what the model was trained
+#                                   for: 256K for most, 512K for Nanbeige, 1M for DeepSeek (the menu offers up to that)
 #     QUANT=Q8_0                    weights, e.g. Q8_0 Q6_K Q4_K_M IQ4_XS (skips step 2; must fit at CTX)
 #     DRAFT=on|off                  the model's draft (MTP head, draft model or DSpark): on/off up front
 #     SPEC=off                      no speculative decoding at all (no draft, no n-gram): reproducible runs and
@@ -100,7 +101,7 @@ SUMMON_VERSION=1.2.0
 LC_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda-b12429   # llama.cpp b12429 (2026-11-16), CUDA 12.8
 LC_NAME=summon
 LC_OLD_NAMES=(nanbeige)                         # container names used by earlier versions of this script
-LC_CTX_TIERS=(262144 196608 131072 98304 65536 49152 32768)
+LC_CTX_TIERS=(1048576 524288 393216 327680 262144 196608 131072 98304 65536 49152 32768)   # each model uses those <= LC_CTX_TRAIN
 LC_OVERHEAD_MB=3584                             # CUDA context + compute buffers at long context + ~1.5 GB margin
 # The data folder is bind-mounted into the container. On Lium, /root is an encrypted FUSE mount that the pod's
 # Sysbox runtime can't bind into nested containers, so the first folder that mounts wins. (Named after the first
@@ -114,6 +115,7 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
   LC_BLURB=""                   # one-line menu description (the model's own summary, shortened; lives here so it can't drift from the id list)
   LC_ARGS=()                    # extra llama-server arguments (e.g. a repeat penalty the model card requires)
   LC_PARTS=()                   # split GGUF: "NNNNN-of-NNNNN|bytes|sha256" per file, named $prefix$sep$QUANT-$part.gguf
+  LC_CTX_TRAIN=262144           # longest context the model was trained for (GGUF <arch>.context_length); never served beyond it
   LC_HOST_PCT=0                 # share of the weights llama.cpp keeps in host memory/disk (never VRAM), e.g. Engram tables
   # Speculative draft: LC_DRAFT_KIND = model (a small model, -md) | mtp (MTP head file, -md) | mtp-inline (MTP layer
   # inside the model file) | dspark (DeepSeek's DSpark drafter, -md) | "" (none). LC_DRAFT = "file|bytes|sha256|repo URL"; LC_DRAFT_KV_F16 = its cache per
@@ -130,6 +132,7 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
       # Full attention in all 52 layers: 8 KV heads x (128 K + 128 V) -> ~110 MB of K/V per 1K tokens at q8_0.
       # RTX A6000 48 GB: 128K fits Q6_K, 256K only Q3_K_M ("low quality" per bartowski). 24 GB cards: ~48K.
       LC_TITLE="Nanbeige 4.3 33B" LC_ALIAS=nanbeige-33b
+      LC_CTX_TRAIN=524288           # GGUF llama.context_length (read 2026-11-21)
       LC_BLURB="Lightweight agent for coding and research. AA index 20"
       LC_REPO=https://huggingface.co/bartowski/Nanbeige_Nanbeige4.3-33B-GGUF/resolve/main
       LC_FILE_PREFIX=Nanbeige_Nanbeige4.3-33B
@@ -355,6 +358,7 @@ lc_model() {   # $1 = model id: sets the LC_* settings of that model
       # plus the indexer keys is an upper bound, so the fit is conservative.
       # Draft: unsloth's DSpark drafter (MIT, 8 GB). Measured on this build: code +30-45% (80-102 tok/s), prose same.
       LC_TITLE="DeepSeek V4.1 Flash OBLITERATED" LC_ALIAS=deepseek-v4.1-flash-obliterated
+      LC_CTX_TRAIN=1048576          # GGUF: 1M via the YaRN scaling baked into the file (x16 over 64K), read 2026-11-21
       LC_BLURB="Uncensored 748B MoE, MMLU 83.6%. Experts in RAM (~126 GB)"
       LC_REPO=https://huggingface.co/HumanjavaEnterprises/DeepSeek-V4.1-Flash-1017-obliterated-upstream-GGUF/resolve/f80c4863ac39a6a7002b3a3675a7c46580f0038b
       LC_FILE_PREFIX=DeepSeek-V4.1-Flash-1017-obliterated-hjimatrix
@@ -935,6 +939,7 @@ lc_file() {   # $1 = quant -> the file llama-server opens (a split GGUF's first 
   if (( ${#LC_PARTS[@]} )); then echo "$LC_FILE_PREFIX$LC_FILE_SEP$1-${LC_PARTS[0]%%|*}.gguf"
   else echo "$LC_FILE_PREFIX$LC_FILE_SEP$1.gguf"; fi
 }
+ctx_tiers() { local c; for c in "${LC_CTX_TIERS[@]}"; do (( c <= LC_CTX_TRAIN )) && echo "$c"; done; return 0; }   # tiers this model was trained for
 # weight bytes, ctx, kv bytes/token -> GPU MB (+ LoRA/draft), without the host-only share (LC_HOST_PCT)
 nb_need_mb() { echo $(( ($1 * (100 - LC_HOST_PCT) / 100 + LC_EXTRA_BYTES) / 1048576 + $2 * $3 / 1048576 )); }
 kv_bytes() { if [ "${1%+ram}" = f16 ]; then echo "$LC_KV_F16"; else echo "$LC_KV_Q8"; fi; }   # "q8_0+ram" -> q8_0
@@ -950,7 +955,7 @@ draft_auto() {   # $1 = model id -> sets DRAFT=on/off when unset: on if it doesn
   [ -n "${DRAFT:-}" ] && return 0
   local q_on q_off c=131072
   DRAFT=off; lc_model "$1"; lc_budget; q_off=$(best_quant $c)
-  if [ -z "$q_off" ]; then for c in "${LC_CTX_TIERS[@]}"; do q_off=$(best_quant "$c"); [ -n "$q_off" ] && break; done; fi
+  if [ -z "$q_off" ]; then for c in $(ctx_tiers); do q_off=$(best_quant "$c"); [ -n "$q_off" ] && break; done; fi
   DRAFT=on;  lc_model "$1"; lc_budget; q_on=$(best_quant $c)
   if [ -n "$q_on" ] && [ "$q_on" = "$q_off" ]; then DRAFT=on; else DRAFT=off; fi
   DRAFT_AUTO_ON=$q_on DRAFT_AUTO_OFF=$q_off DRAFT_AUTO_CTX=$c
@@ -1156,7 +1161,7 @@ if [ -z "${ENGINE:-}" ] || { [ "$ENGINE" = ollama ] && [ -z "${ONLY:-}" ]; }; th
     DRAFT=$DRAFT_USER; draft_auto "$id"; lc_model "$id"; lc_budget
     # Fit label like Ollama's: weights ~total VRAM @ context (128K, or the longest context that fits)
     q=$(best_quant 131072); c=131072
-    if [ -z "$q" ]; then for c in "${LC_CTX_TIERS[@]}"; do q=$(best_quant "$c"); [ -n "$q" ] && break; done; fi
+    if [ -z "$q" ]; then for c in $(ctx_tiers); do q=$(best_quant "$c"); [ -n "$q" ] && break; done; fi
     kv=""
     if [ -n "$q" ]; then
       for e in "${LC_QUANTS[@]}"; do [ "${e%%|*}" = "$q" ] && b=$(echo "$e" | cut -d'|' -f2); done
@@ -1370,6 +1375,10 @@ install_llamacpp() {
   lc_model "$1"; lc_budget
   if [ -n "${CTX:-}" ]; then
     [[ "$CTX" =~ ^[0-9]+$ ]] && (( CTX > 0 )) || { echo "CTX must be a positive number of tokens"; exit 1; }
+    if (( CTX > LC_CTX_TRAIN )); then   # past its training the model degrades quietly (llama.cpp only warns in the log)
+      echo "$LC_TITLE was trained for up to $LC_CTX_TRAIN tokens ($((LC_CTX_TRAIN/1024))K); CTX=$CTX would degrade it. Use CTX=$LC_CTX_TRAIN or less."
+      exit 1
+    fi
   fi
   if [ -n "${QUANT:-}" ]; then
     local qok=0 e
@@ -1395,7 +1404,7 @@ install_llamacpp() {
   local DEF_CTX="" c q b s e kv tot ITEMS DEF_Q PICK
   [ -n "$(best_quant 131072)" ] && DEF_CTX=131072
   if [ -z "$DEF_CTX" ]; then
-    for c in "${LC_CTX_TIERS[@]}"; do [ -n "$(best_quant "$c")" ] && { DEF_CTX=$c; break; }; done
+    for c in $(ctx_tiers); do [ -n "$(best_quant "$c")" ] && { DEF_CTX=$c; break; }; done
   fi
   if [ -z "$DEF_CTX" ] && [ -z "${CTX:-}" ]; then
     echo "$LC_TITLE doesn't fit in $((FREE_MB/1024)) GB of VRAM$( (( LC_EXPERT_PCT )) && echo " + $((AVAIL_RAM_MB/1024)) GB free RAM")${QUANT:+ with QUANT=$QUANT} at 32K or more."
@@ -1404,7 +1413,7 @@ install_llamacpp() {
   fi
   if (( INTERACTIVE )) && [ -z "${CTX:-}" ] && [ -z "${QUANT:-}" ]; then
     ITEMS=()
-    for c in "${LC_CTX_TIERS[@]}"; do
+    for c in $(ctx_tiers); do
       q=$(best_quant "$c"); [ -n "$q" ] || continue
       for e in "${LC_QUANTS[@]}"; do [ "${e%%|*}" = "$q" ] && b=$(echo "$e" | cut -d'|' -f2); done
       kv=$(fit_kv "$b" "$c")

@@ -52,7 +52,7 @@ Piping a script into a shell gives it root. Read [summon.sh](summon.sh) first; i
 |---|---|---|
 | RTX 3090 / 4090 (24 GB) | $0.15–0.64 (3090), $0.35–0.55 (4090) | Ornith 1.5 9B at 128K, 8-bit. ThinkingCap / Qwen3.8 27B at 128K, 4-bit. Ornith 35B with experts in RAM |
 | **L40 / L40S / RTX A6000 (48 GB)** | **$0.33 (L40), $0.38 (L40S)**, $0.42–0.67 (A6000) | **Best value.** Nanbeige 33B at 128K, 6-bit; ThinkingCap, Qwen3.8, Ornith 35B at 128K, 8-bit (~42 tok/s measured on an L40) |
-| RTX PRO 6000 Blackwell (96 GB) | $1.60–1.99 | Every 27–35B model at 128K, 8-bit. DeepSeek V4.1 Flash 748B too, if the pod has ~130 GB free RAM (experts in RAM) |
+| RTX PRO 6000 Blackwell (96 GB) | $1.60–1.99 | Every 27–35B model at 256K, 8-bit; Nanbeige up to 384K at 8-bit (512K at 3-bit). DeepSeek V4.1 Flash 748B too, if the pod has ~130 GB free RAM (experts in RAM) |
 
 Prices are [Lium](https://lium.io/pricing)'s live asks per GPU on 2026-11-20 and change with supply. Check any card first: `SUMMON_GPU="L40:46068" ./summon.sh --dry-run`.
 
@@ -87,6 +87,7 @@ When it's done, Summon prints:
 
 - **Only what fits.** The menu lists only models that fit this machine's VRAM (summed over all cards) and, for MoE models with experts in RAM, its free RAM. The rest are named in one line and left out.
 - **Context first, then precision.** Every token reads all the weights plus the part of the cache in use, so reserving a long context costs VRAM, not speed. Summon defaults to 128K with the most precise weights that still fit, and never uses a 4-bit cache.
+- **Never past training.** The context menu goes as far as the card allows, but never beyond what the model was trained for (read from its GGUF): 256K for the Qwen3.8, Ornith and feyospace models, 512K for Nanbeige, 1M for DeepSeek V4.1 Flash. `CTX=` above that is refused, because quality degrades quietly past it.
 - **Each model's own chat template** (llama.cpp `--jinja`), so native tool calls and thinking blocks work. That's why Nanbeige and Ornith run on llama.cpp: Ollama's builds of them ship without tool support.
 - **Every layer on the GPU** (`--fit off`): if it doesn't fit, it fails loudly instead of silently crawling on the CPU.
 - **Host-RAM prompt cache** so side requests (chat titles, subagents) don't evict a 200K-token conversation.
