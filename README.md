@@ -105,6 +105,22 @@ When it's done, Summon prints:
 
 The acceptance rates show speculative decoding is working: the model accepts about half of the drafted tokens even on a 35K-token context. No baseline with speculation off was recorded, so the exact speed-up on this card is still unmeasured.
 
+**Nanbeige4.3 33B on an NVIDIA A100 80GB PCIe**, with Q6_K weights, a 256K context, a q8_0 cache, and speculative decoding from a 3B draft model plus n-gram drafts. Measured with `python3 tools/bench.py`.
+
+| Workload (thinking off, median of 3) | Decode | Draft acceptance |
+|---|---|---|
+| Prose | **35.0 tok/s** | 46% |
+| New code | **66.2 tok/s** (62–94) | 77% |
+| Rewriting an existing file | **471 tok/s** | 100% |
+
+| Prompt | Prefill | Time to first token | Decode | Needle at 10 / 50 / 90% depth |
+|---|---|---|---|---|
+| 8K tokens | 958 tok/s | 8 s | 45–62 tok/s | found / found / found |
+| 32K tokens | 783 tok/s | 40 s | 26–37 tok/s | found / found / found |
+| 127K tokens | 448 tok/s | 4.7 min | 14–19 tok/s | found / found / not run |
+
+Coherence, with thinking on: it passed all 24 graded runs (12 tasks, twice each). The tasks were math, logic, two coding tasks checked against tests, strict JSON, an exact output format, a tool call, answering from a tool result, multi-turn recall, and saying so when a fact can't be known. In an earlier quick pass it missed the number-theory sum once and returned an empty answer after a tool result once. A 3,478-word essay had 99.3% distinct 4-grams and no repeated passages.
+
 | | |
 |---|---|
 | ![Summon installing and serving ThinkingCap on an L40](docs/img/12-l40-thinkingcap-install.png) | ![llama-server timings: ~42 tok/s decode with MTP drafts](docs/img/13-l40-thinkingcap-speed.png) |
