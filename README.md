@@ -119,6 +119,8 @@ The acceptance rates show speculative decoding is working: the model accepts abo
 | 32K tokens | 783 tok/s | 40 s | 26–37 tok/s | found / found / found |
 | 127K tokens | 448 tok/s | 4.7 min | 14–19 tok/s | found / found / not run |
 
+Prefill is compute-bound here: the card sat at 100% use and its 300 W power limit. A larger prompt batch (`-ub 2048 -b 2048`, +1.7 GB VRAM) gave 8–10% faster prefill (1,056 / 851 / 483 tok/s at 8K / 32K / 127K) with no decode loss. A 239K-token prompt took 12.2 minutes to prefill at 325 tok/s, then decoded at 8.8 tok/s, and the needle was still found.
+
 Coherence, with thinking on: it passed all 24 graded runs (12 tasks, twice each). The tasks were math, logic, two coding tasks checked against tests, strict JSON, an exact output format, a tool call, answering from a tool result, multi-turn recall, and saying so when a fact can't be known. In an earlier quick pass it missed the number-theory sum once and returned an empty answer after a tool result once. A 3,478-word essay had 99.3% distinct 4-grams and no repeated passages.
 
 | | |
