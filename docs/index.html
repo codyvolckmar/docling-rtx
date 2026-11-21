@@ -96,6 +96,7 @@
     <tr><td><b>Ornith 1.5 35B</b></td><td>llama.cpp</td><td>Fast MoE, ~3B active per token. Vendor benchmarks only.</td><td>128K, experts in RAM</td><td>256K with 8-bit weights</td></tr>
     <tr><td><b>Ornith 1.5 9B</b></td><td>llama.cpp</td><td>Fast and light. Vendor benchmarks only.</td><td>256K with 8-bit weights</td><td>256K with 8-bit weights</td></tr>
     <tr><td><b>ThinkingCap Qwen3.8 27B</b></td><td>llama.cpp</td><td>Qwen3.8 27B that thinks ~37% less, with its built-in MTP head for faster decoding. PolyForm Small Business licence.</td><td>128K (IQ4_XS)</td><td>128K with 8-bit weights</td></tr>
+    <tr><td><b>Ternary Bonsai 2 27B</b></td><td>llama.cpp</td><td>Qwen3.8 27B in ternary weights: 7.6 GB, 98% of FP16 across 14 benchmarks (vendor). Runs on 16 GB cards at 128K.</td><td>256K (q8_0 cache)</td><td>256K (f16 cache)</td></tr>
     <tr><td><b>Qwen3.8 27B OBLITERATED</b></td><td>llama.cpp</td><td>Uncensored Qwen3.8 (OBLITERATUS abliteration, vendor MMLU -2.1pp). Thinking off; served with Qwen3.8's own template so tool calls work.</td><td>128K (Q4_K_M)</td><td>256K with 8-bit weights</td></tr>
     <tr><td><b>Ornith 1.5 9B OBLITERATED</b></td><td>llama.cpp</td><td>Uncensored Ornith 9B (vendor MMLU -4pp). Thinking off.</td><td>256K with 8-bit weights</td><td>256K with 8-bit weights</td></tr>
     <tr><td><b>feyospace-s1 OBLITERATED</b></td><td>llama.cpp</td><td>Uncensored ~28B tuned for cybersecurity: pentests, CTFs, vulnerability research. Run its tools in a sandbox.</td><td>128K (Q4_K_M)</td><td>256K with 8-bit weights</td></tr>
@@ -109,7 +110,8 @@
   <h2><span>04</span> What should I rent?</h2>
   <table>
     <tr><th>GPU (VRAM)</th><th>Lium price per hour</th><th>What Summon runs on it</th></tr>
-    <tr><td><b>RTX 3090 / 4090</b> (24 GB)</td><td>$0.15–0.64 (3090)<br>$0.35–0.55 (4090)</td><td>Ornith 1.5 9B at 128K, 8-bit (pre-selected). ThinkingCap 27B or Qwen3.8 27B at 128K, 4-bit. Ornith 35B with experts in RAM. Good for trying it out and light agents.</td></tr>
+    <tr><td><b>RTX 4060 Ti / 5060 Ti / 5070 Ti</b> (16 GB)</td><td>$0.12–0.30</td><td>Ternary Bonsai 2 27B at 128K, the only 27B that fits. Cheapest way to run a 27B. 12 GB cards are not offered.</td></tr>
+    <tr><td><b>RTX 3090 / 4090</b> (24 GB)</td><td>$0.15–0.64 (3090)<br>$0.35–0.55 (4090)</td><td>Ornith 1.5 9B at 128K, 8-bit (pre-selected). Ternary Bonsai 2 27B at 256K. ThinkingCap 27B or Qwen3.8 27B at 128K, 4-bit. Ornith 35B with experts in RAM. Good for trying it out and light agents.</td></tr>
     <tr><td><b>L40 / L40S / RTX A6000</b> (48 GB)</td><td><b>$0.33 (L40)<br>$0.38 (L40S)</b><br>$0.42–0.67 (A6000)</td><td><b>Best value.</b> Nanbeige 33B at 128K, 6-bit (pre-selected). ThinkingCap, Qwen3.8 and Ornith 35B at 128K, 8-bit. Measured: ~42 tok/s with ThinkingCap on an L40.</td></tr>
     <tr><td><b>RTX PRO 6000 Blackwell</b> (96 GB)</td><td>$1.60–1.99</td><td>Every 27–35B model at 256K, 8-bit; Nanbeige up to 384K at 8-bit (512K at 3-bit). DeepSeek V4.1 Flash 748B too, if the pod has ~130 GB free RAM (experts in system RAM).</td></tr>
   </table>

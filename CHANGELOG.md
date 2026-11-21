@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Ternary Bonsai 2 27B** (`bonsai27b`, prism-ml, Apache-2.0): Qwen3.8 27B in ternary weights, 7.6 GB. Uses the `Q2_0` file, which runs on stock llama.cpp (b11556+); the smaller `PQ2_0`/`PTQ1_0` files still need PrismML's fork. 256K on a 24 GB card, 128K on 16 GB. No MTP layer, so n-gram drafts only. Tested on an A100 80GB: install, tool-call test, 24/24 coherence, needle recall.
+- `tools/bench.py`: speed and coherence benchmark for any Summon server.
 - **Model menu shows each model's longest context** on this machine (`max 384K`), so contexts past 128K are visible before the context step.
 - **Just go:** `./summon.sh --auto` (or `GO=1`) asks nothing: the recommended model, context and weights for the machine, port 20001.
 - **`./summon.sh status`:** engine, model, context, port, health, last decode speed, HTTPS URL and GPU memory in one screen.
