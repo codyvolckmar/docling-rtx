@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Model menu shows each model's longest context** on this machine (`max 384K`), so contexts past 128K are visible before the context step.
 - **Just go:** `./summon.sh --auto` (or `GO=1`) asks nothing: the recommended model, context and weights for the machine, port 20001.
 - **`./summon.sh status`:** engine, model, context, port, health, last decode speed, HTTPS URL and GPU memory in one screen.
 - **Ollama survives reboots:** it runs as the `summon-ollama` systemd service (starts on boot, re-applies the IP lock). No systemd (many pod containers): the old `screen` session, and Summon says so.

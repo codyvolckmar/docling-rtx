@@ -1151,10 +1151,10 @@ if [ -z "${ENGINE:-}" ] || { [ "$ENGINE" = ollama ] && [ -z "${ONLY:-}" ]; }; th
   DEF_ENGINE="" LC_ITEMS=() OL_ITEMS=() ITEMS=() LC_HIDDEN=() OL_HIDDEN=()
   MENU_COLS=$(( $(tput cols 2>/dev/null || echo 124) - 4 )); (( MENU_COLS > 150 )) && MENU_COLS=150
   MENU_LINES=$(tput lines 2>/dev/null || echo 34)
-  DESC_W=$(( MENU_COLS - 12 - 28 - 2 - 17 - 2 )); (( DESC_W < 12 )) && DESC_W=12   # borders/indent + name + fit
-  row() {   # $1 name, $2 fit, $3 description -> one spaced, width-safe menu line
+  DESC_W=$(( MENU_COLS - 12 - 28 - 2 - 17 - 2 - 9 - 2 )); (( DESC_W < 12 )) && DESC_W=12   # borders/indent + name + fit + max
+  row() {   # $1 name, $2 fit, $3 description, $4 longest context that fits ("max 384K", may be empty) -> one menu line
     local d=$3; (( ${#d} > DESC_W )) && d="${d:0:DESC_W-3}..."
-    printf '%-28.28s  %-17s  %s' "$1" "$2" "$d"
+    printf '%-28.28s  %-17s  %-9s  %s' "$1" "$2" "${4:-}" "$d"
   }
   DRAFT_USER=${DRAFT:-}
   for id in "${LC_MODEL_IDS[@]}"; do
@@ -1172,7 +1172,8 @@ if [ -z "${ENGINE:-}" ] || { [ "$ENGINE" = ollama ] && [ -z "${ONLY:-}" ]; }; th
     [ -n "$q" ] || { LC_HIDDEN+=("$LC_TITLE"); continue; }   # doesn't fit this machine: not offered
     if [[ $kv == *+ram ]]; then fit="$q +RAM@$((c/1024))K"
     else fit="$q ~$(( ($(nb_need_mb "$b" "$c" "$(kv_bytes "$kv")") + LC_OVERHEAD_MB) / 1024 ))G@$((c/1024))K"; fi
-    LC_ITEMS+=("$id" "$(row "$LC_TITLE" "$fit" "$LC_BLURB")")   # blurb from lc_model: can't drift from the id list
+    maxc=""; for m in $(ctx_tiers); do [ -n "$(best_quant "$m")" ] && { maxc="max $((m/1024))K"; break; }; done   # step 1 offers up to this
+    LC_ITEMS+=("$id" "$(row "$LC_TITLE" "$fit" "$LC_BLURB" "$maxc")")   # blurb from lc_model: can't drift from the id list
   done
   DRAFT=$DRAFT_USER
   for i in "${!RANKS[@]}"; do
@@ -1205,7 +1206,7 @@ if [ -z "${ENGINE:-}" ] || { [ "$ENGINE" = ollama ] && [ -z "${ONLY:-}" ]; }; th
     PICKED=_h1
     while [[ $PICKED == _* ]]; do   # a header or the gap: show the menu again
       PICKED=$(CHOOSE_NOTAGS=1 CHOOSE_W=150 CHOOSE_TEXTLINES=1 choose "Summon v$SUMMON_VERSION - ${GPU_COUNT}x $GPU_NAME, $((FREE_MB/1024)) GB" \
-        "Which model do you want to run? Pre-selected: the best model reaching 128K here. Size = weights ~VRAM@context." \
+        "Which model do you want to run? Pre-selected: best at 128K. Size = weights ~VRAM@context, max = longest context." \
         "$DEF_ENGINE" "${ITEMS[@]}") || { echo "Cancelled."; exit 0; }
     done
   fi
