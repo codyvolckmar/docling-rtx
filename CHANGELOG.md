@@ -6,6 +6,7 @@
 - **`./summon.sh status`:** engine, model, context, port, health, last decode speed, HTTPS URL and GPU memory in one screen.
 - **Ollama survives reboots:** it runs as the `summon-ollama` systemd service (starts on boot, re-applies the IP lock). No systemd (many pod containers): the old `screen` session, and Summon says so.
 - **Plainer wording:** tagline "Your GPU. Your model. Your API."; the banner drops the stars and the "summoning" line; menus ask "Which model do you want to run?". Screenshots and the hero image regenerated.
+- **Context limits:** the context menu now goes past 256K for models trained further (Nanbeige 4.3: 512K, DeepSeek V4.1 Flash: 1M), shown only when they fit. `CTX=` above a model's trained context (read from its GGUF) is refused instead of silently degrading it.
 - **"What should I rent?"** table on the site and in the README: Lium's prices for 24, 48 and 96 GB cards and what Summon runs on each.
 
 ## v1.2.0 (2026-11-20)

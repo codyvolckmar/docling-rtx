@@ -111,7 +111,7 @@
     <tr><th>GPU (VRAM)</th><th>Lium price per hour</th><th>What Summon runs on it</th></tr>
     <tr><td><b>RTX 3090 / 4090</b> (24 GB)</td><td>$0.15–0.64 (3090)<br>$0.35–0.55 (4090)</td><td>Ornith 1.5 9B at 128K, 8-bit (pre-selected). ThinkingCap 27B or Qwen3.8 27B at 128K, 4-bit. Ornith 35B with experts in RAM. Good for trying it out and light agents.</td></tr>
     <tr><td><b>L40 / L40S / RTX A6000</b> (48 GB)</td><td><b>$0.33 (L40)<br>$0.38 (L40S)</b><br>$0.42–0.67 (A6000)</td><td><b>Best value.</b> Nanbeige 33B at 128K, 6-bit (pre-selected). ThinkingCap, Qwen3.8 and Ornith 35B at 128K, 8-bit. Measured: ~42 tok/s with ThinkingCap on an L40.</td></tr>
-    <tr><td><b>RTX PRO 6000 Blackwell</b> (96 GB)</td><td>$1.60–1.99</td><td>Every 27–35B model at 128K, 8-bit. DeepSeek V4.1 Flash 748B too, if the pod has ~130 GB free RAM (experts in system RAM).</td></tr>
+    <tr><td><b>RTX PRO 6000 Blackwell</b> (96 GB)</td><td>$1.60–1.99</td><td>Every 27–35B model at 256K, 8-bit; Nanbeige up to 384K at 8-bit (512K at 3-bit). DeepSeek V4.1 Flash 748B too, if the pod has ~130 GB free RAM (experts in system RAM).</td></tr>
   </table>
   <p class="note">Start with a 48 GB card: it runs every 27–35B model at 128K with near-full precision, for about the price of a 24 GB card. Prices are <a href="https://lium.io/pricing">Lium</a>'s live asks per GPU on 2026-11-20 and change with supply.
     Check any card before renting: <code>SUMMON_GPU="L40:46068" ./summon.sh --dry-run</code>.</p>
