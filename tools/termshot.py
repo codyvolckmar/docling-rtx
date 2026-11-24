@@ -340,6 +340,8 @@ if __name__ == '__main__':
         ('until', r'Choose:', 15), ('shot', '01-menu.png', title),
         ('key', DOWN), ('key', ENTER), ('until', r'Space to toggle', 10), ('shot', '02-components.png', title),
         ('key', ESC), ('until', r'Choose:', 10),
+        ('key', DOWN), ('key', ENTER), ('until', r'Watcher:', 10), ('shot', '05-drop-folder.png', title),
+        ('key', ESC), ('until', r'Choose:', 10),
         ('key', DOWN * 3), ('key', ENTER), ('until', r'Settings:', 15), ('shot', '03-status.png', title),
         ('key', ENTER), ('until', r'Choose:', 10), ('key', ESC), ('wait', 1),
     ], out)

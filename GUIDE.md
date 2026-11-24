@@ -1,6 +1,45 @@
 # How to process documents
 
-You ran `./docling-setup.sh` and the install finished. This guide covers the daily workflow: check the server, convert documents, pick an engine and use the output.
+You ran `./docling-setup.sh` and the install finished. This guide covers the daily workflow: the drop folder, converting by hand, picking an engine and using the output.
+
+## 0. The drop folder (the main workflow)
+
+Put documents in **`~/docling/inbox`**. A structured JSON file for each one appears in **`~/docling/outbox`**. That's all there is to it.
+
+```bash
+cp contracts/*.pdf prices.csv memo.docx ~/docling/inbox/
+ls ~/docling/outbox        # contract-a.json  prices.json  memo.json ...
+```
+
+The `docling-watch` service runs this. It starts on boot and scans the inbox every 5 seconds, including subfolders, whose layout is mirrored in the outbox. Control it with `./docling-setup.sh watch start|stop|restart|logs`, or from menu 3, where you can also change the folders, output formats and engine.
+
+**What gets converted:** everything Docling reads. That includes PDF, DOCX/DOC, PPTX/PPT, XLSX/XLS, CSV, ODT/ODS/ODP, HTML, Markdown, TXT, EPUB, AsciiDoc, LaTeX, email (`.eml`, `.msg`), calendars (`.ics`), XML (JATS/USPTO/XBRL) and images (PNG, JPG, TIFF, BMP, WEBP, GIF). The watcher ignores hidden files (`.name`), Office lock files (`~$name`) and audio/video.
+
+**Rules for the agent that reads the outbox:**
+
+1. **A `.json` file in the outbox is always complete.** Files are written under a hidden temp name and then renamed, so the agent never sees a half-written file. Ignore files that start with `.`.
+2. **`name.json` = success.** It is a [DoclingDocument](https://docling-project.github.io/docling/concepts/docling_document/): text in reading order, headings, lists, tables as cells, page numbers and bounding boxes for PDFs.
+3. **`name.error.json` = failure.** It holds `{"source", "status", "errors", "time"}`. A failed file is not retried until it changes. Drop a fixed version under the same name and the error file is removed once it converts.
+4. **Re-conversion:** if a source file changes (newer mtime), its JSON is rewritten. Deleting a source does not delete its JSON.
+5. **Copying big files in:** a file is converted only after it stays unchanged for one scan. If a copy stalls for more than ~5 s, the file may be converted early and then again once complete. For big network copies, the safest way is to copy under a hidden name and then rename: `cp big.pdf inbox/.big.pdf && mv inbox/.big.pdf inbox/big.pdf`.
+
+Reading the JSON, in Python:
+
+```python
+from pathlib import Path
+from docling_core.types.doc import DoclingDocument
+
+for f in sorted(Path("~/docling/outbox").expanduser().rglob("*.json")):
+    if f.name.startswith(".") or f.name.endswith(".error.json"):
+        continue
+    doc = DoclingDocument.load_from_json(f)
+    text = doc.export_to_markdown()                                   # whole document as Markdown
+    tables = [t.export_to_dataframe(doc=doc) for t in doc.tables]     # every table as a pandas DataFrame
+```
+
+Without docling-core, it's plain JSON. `texts[]` items have `label` (title, section_header, text, list_item, caption...), `text` and `prov[].page_no`. `tables[].data.table_cells[]` have `text`, `start_row_offset_idx` and `start_col_offset_idx`. `body.children` gives the reading order.
+
+**Size:** the JSON is complete, not compact. An 8-page paper is ~290 KB of JSON against ~37 KB of Markdown. If the agent only needs to read the text, add Markdown in menu 3 (output `json` + `md`). The agent can then read `name.md` and look up `name.json` for exact tables and page positions.
 
 ## 1. Check it's live
 
@@ -54,7 +93,7 @@ Office, HTML and Markdown files skip the page models entirely, whatever the engi
 ## 4. Speed and GPU memory
 
 - `--batch N` sets how many pages are in flight. It defaults to 32 (`DOCLING_BATCH` env). Docling's guidance: RTX 5090 (32 GB) 64-128, RTX 4090 (24 GB) 32-64, 12 GB cards 16-32. For `--engine vlm`, a higher batch means more parallel requests to vLLM, which is where the throughput comes from.
-- vLLM reserves `GPU_UTIL` of the card (0.9 by default), which leaves too little room for the `standard` engine on the same GPU. If you use both, lower `GPU_UTIL` to about 0.4 under menu, Settings, or stop the server (`./docling-setup.sh stop`) during standard runs.
+- vLLM reserves `GPU_UTIL` of the card. The default here is 0.5 (Docling's RTX guide uses 0.9), so the drop folder's `standard` engine fits on the same GPU. If you only use `--engine vlm`, raise it to 0.9 under menu, Settings. On 8-12 GB cards, lower it to 0.3, or stop the server (`./docling-setup.sh stop`) if you don't use the VLM.
 - `--no-ocr` skips OCR for clean digital PDFs. That's faster, but scanned pages come out empty.
 - Watch the GPU with `nvidia-smi -l 1`. Low utilization during a big batch means you should raise `--batch`.
 
@@ -128,6 +167,7 @@ docling-convert scans/ --engine vlm      # on the laptop, with docling installed
 | `CUDA False` in status | Check `nvidia-smi`. If the driver is fine, the CPU torch wheel got installed: under menu, Settings, set CUDA to `cu128`, then reinstall Docling (menu 2, `docling` only). |
 | `No vLLM server answering` | `./docling-setup.sh start`. The first start takes 1-2 minutes. Then check `./docling-setup.sh logs`. |
 | vLLM: CUDA out of memory at start | Another process holds the GPU (check `nvidia-smi`). Stop it or lower `GPU_UTIL`. |
+| Nothing appears in the outbox | `./docling-setup.sh watch logs`. Is the file type supported? Is it a hidden file? Is the watcher up (`status`)? |
 | Out of memory during `standard` runs | Lower `--batch`, or stop vLLM / lower `GPU_UTIL`. |
 | `Address already in use` | Something else is on port 8000. Change `PORT` in Settings and pass `--server http://127.0.0.1:PORT/v1/chat/completions`. |
 | Scanned PDF comes out empty | Don't use `--no-ocr`, or use `--engine vlm`. |

@@ -5,7 +5,8 @@
 #
 #   ./docling-setup.sh               whiptail menu
 #   ./docling-setup.sh install       full install, no questions (also: --auto, -y)
-#   ./docling-setup.sh start|stop|restart|status|test|uninstall
+#   ./docling-setup.sh start|stop|restart|status|test|logs|uninstall      (the vLLM server)
+#   ./docling-setup.sh watch start|stop|logs   the drop folder: files put in INBOX come out as JSON in OUTBOX
 #   ./docling-setup.sh --dry-run     show what install would do, change nothing
 #
 # What it installs (nothing outside these, apart from apt packages and the optional systemd unit):
@@ -15,15 +16,17 @@
 #   $DOCLING_HOME/convert.py           batch converter; launcher: ~/.local/bin/docling-convert
 #   ~/.cache/huggingface               model weights (granite-docling-258M, Docling's layout/table models)
 #   docling-vllm.service               systemd unit (or a background process where systemd isn't running)
+#   docling-watch.service              the drop-folder watcher, same (folders: ~/docling/inbox -> ~/docling/outbox)
 # You only need the NVIDIA driver: the PyTorch and vLLM wheels ship their own CUDA runtime and cuDNN, so the
 # CUDA Toolkit and cuDNN steps of the Docling RTX guide are not needed.
 #
 # Settings (environment or $DOCLING_HOME/config.env; the menu edits the file):
-#   DOCLING_HOME=~/.docling-rtx  PORT=8000  GPU_UTIL=0.9  BATCH=auto  CUDA=auto (cu126|cu128|cu130|cpu)
+#   DOCLING_HOME=~/.docling-rtx  PORT=8000  GPU_UTIL=0.5  BATCH=auto  CUDA=auto (cu126|cu128|cu130|cpu)
+#   INBOX=~/docling/inbox  OUTBOX=~/docling/outbox  WATCH_ENGINE=standard|vlm|local  WATCH_FORMATS="json"
 #   DOCLING_GPU="RTX 4090:24564:575.64"   pretend this GPU (name:MB:driver), for --dry-run previews
 set -euo pipefail
 
-VERSION=1.0.0
+VERSION=1.1.0
 MODEL=ibm-granite/granite-docling-258M
 MODEL_REV=untied   # the model card's vLLM example loads this branch (untied embedding weights)
 DOCLING_HOME=${DOCLING_HOME:-$HOME/.docling-rtx}
@@ -48,13 +51,18 @@ interactive() { [ -t 1 ] && [ -r /dev/tty ] && have whiptail; }
 wt() { whiptail --backtitle "Docling RTX setup $VERSION" "$@" 3>&1 1>&2 2>&3 </dev/tty; }
 
 load_conf() {   # environment beats config.env beats defaults
-  local p=${PORT:-} g=${GPU_UTIL:-} b=${BATCH:-} c=${CUDA:-}
+  local p=${PORT:-} g=${GPU_UTIL:-} b=${BATCH:-} c=${CUDA:-} i=${INBOX:-} o=${OUTBOX:-} e=${WATCH_ENGINE:-} f=${WATCH_FORMATS:-}
   if [ -f "$CONF" ]; then . "$CONF"; fi
-  PORT=${p:-${PORT:-8000}} GPU_UTIL=${g:-${GPU_UTIL:-0.9}} BATCH=${b:-${BATCH:-auto}} CUDA=${c:-${CUDA:-auto}}
+  # GPU_UTIL 0.5, not the RTX guide's 0.9: the 258M model needs little, and the drop-folder watcher's standard
+  # pipeline shares the card. Raise it if you only use the vlm engine.
+  PORT=${p:-${PORT:-8000}} GPU_UTIL=${g:-${GPU_UTIL:-0.5}} BATCH=${b:-${BATCH:-auto}} CUDA=${c:-${CUDA:-auto}}
+  INBOX=${i:-${INBOX:-$HOME/docling/inbox}} OUTBOX=${o:-${OUTBOX:-$HOME/docling/outbox}}
+  WATCH_ENGINE=${e:-${WATCH_ENGINE:-standard}} WATCH_FORMATS=${f:-${WATCH_FORMATS:-json}}
 }
 save_conf() {
   mkdir -p "$DOCLING_HOME"
-  printf 'PORT=%s\nGPU_UTIL=%s\nBATCH=%s\nCUDA=%s\n' "$PORT" "$GPU_UTIL" "$BATCH" "$CUDA" > "$CONF"
+  printf 'PORT=%s\nGPU_UTIL=%s\nBATCH=%s\nCUDA=%s\nINBOX="%s"\nOUTBOX="%s"\nWATCH_ENGINE=%s\nWATCH_FORMATS="%s"\n' \
+    "$PORT" "$GPU_UTIL" "$BATCH" "$CUDA" "$INBOX" "$OUTBOX" "$WATCH_ENGINE" "$WATCH_FORMATS" > "$CONF"
 }
 
 # --- detection -------------------------------------------------------------------------------------------
@@ -197,33 +205,88 @@ vllm_cmd() {
        "--enable-chunked-prefill --gpu-memory-utilization $GPU_UTIL"
 }
 
-step_service() {
-  [ -x "$DOCLING_HOME/vllm/bin/vllm" ] || [ "$DRY" = 1 ] || { warn "vLLM not installed: no service."; return; }
-  if has_systemd; then
-    say "systemd service $SERVICE (starts on boot)"
-    local unit
-    unit="[Unit]
-Description=granite-docling-258M on vLLM (Docling VLM server)
+write_unit() {   # $1 name, $2 description, $3 ExecStart, $4 extra [Unit] lines
+  local unit; unit="[Unit]
+Description=$2
 After=network-online.target
-
+$4
 [Service]
 User=$(id -un)
+Environment=HOME=$HOME
 Environment=HF_HOME=${HF_HOME:-$HOME/.cache/huggingface}
 Environment=HF_HUB_DISABLE_TELEMETRY=1
 Environment=VLLM_NO_USAGE_STATS=1
-ExecStart=$(vllm_cmd)
-Restart=on-failure
+Environment=PYTHONUNBUFFERED=1
+ExecStart=$3
+Restart=always
 RestartSec=10
 
 [Install]
 WantedBy=multi-user.target"
-    if [ "$DRY" = 1 ]; then echo "   [dry-run] write /etc/systemd/system/$SERVICE.service:"; echo "             ExecStart=$(vllm_cmd)"
-    else echo "$unit" | $SUDO tee /etc/systemd/system/$SERVICE.service >/dev/null; fi
-    run $SUDO systemctl daemon-reload
-    run $SUDO systemctl enable -q $SERVICE
+  if [ "$DRY" = 1 ]; then echo "   [dry-run] write /etc/systemd/system/$1.service:"; echo "             ExecStart=$3"
+  else echo "$unit" | $SUDO tee "/etc/systemd/system/$1.service" >/dev/null; fi
+  run $SUDO systemctl daemon-reload
+  run $SUDO systemctl enable -q "$1"
+}
+
+step_service() {
+  [ -x "$DOCLING_HOME/vllm/bin/vllm" ] || [ "$DRY" = 1 ] || { warn "vLLM not installed: no service."; return; }
+  if has_systemd; then
+    say "systemd service $SERVICE (starts on boot)"
+    write_unit "$SERVICE" "granite-docling-258M on vLLM (Docling VLM server)" "$(vllm_cmd)" ""
   else
     ok "No systemd here: the server runs as a background process (rerun 'start' after a reboot)."
   fi
+}
+
+# --- drop folder: INBOX -> OUTBOX ------------------------------------------------------------------------
+WATCH=docling-watch
+watch_pidfile=$DOCLING_HOME/watch.pid
+watch_unit() { has_systemd && [ -f /etc/systemd/system/$WATCH.service ]; }
+watch_cmd() {
+  local f to=""
+  for f in $WATCH_FORMATS; do to="$to --to $f"; done
+  echo "$DOCLING_HOME/venv/bin/python $DOCLING_HOME/convert.py --watch $INBOX -o $OUTBOX$to" \
+       "--engine $WATCH_ENGINE --batch $(auto_batch) --server http://127.0.0.1:$PORT/v1/chat/completions"
+}
+step_watch() {
+  say "Drop folder: $INBOX -> $OUTBOX ($WATCH_FORMATS, engine $WATCH_ENGINE)"
+  run mkdir -p "$INBOX" "$OUTBOX"
+  if has_systemd; then
+    local after=""; [ "$WATCH_ENGINE" = vlm ] && after="Wants=$SERVICE.service
+After=$SERVICE.service"
+    write_unit "$WATCH" "Docling drop folder: $INBOX -> $OUTBOX" "$(watch_cmd)" "$after"
+  fi
+  [ "$DRY" = 1 ] || watch_start
+}
+watch_running() {
+  if watch_unit; then systemctl is-active -q $WATCH
+  else [ -f "$watch_pidfile" ] && kill -0 "$(cat "$watch_pidfile")" 2>/dev/null; fi
+}
+watch_start() {
+  [ -x "$DOCLING_HOME/venv/bin/python" ] || { warn "Docling isn't installed (menu: Install)."; return 1; }
+  mkdir -p "$INBOX" "$OUTBOX"
+  if watch_unit; then $SUDO systemctl restart $WATCH
+  else
+    watch_running && watch_stop >/dev/null
+    setsid nohup $(watch_cmd) >> "$DOCLING_HOME/watch.log" 2>&1 < /dev/null &
+    echo $! > "$watch_pidfile"
+  fi
+  sleep 2
+  if watch_running; then ok "Watching $INBOX -> $OUTBOX. Drop files in; JSON appears in the outbox."
+  else warn "The watcher stopped right away. Log:"; watch_logs | tail -15; return 1; fi
+}
+watch_stop() {
+  if watch_unit; then $SUDO systemctl stop $WATCH
+  elif [ -f "$watch_pidfile" ]; then kill "$(cat "$watch_pidfile")" 2>/dev/null || true; rm -f "$watch_pidfile"; fi
+  ok "Drop-folder watcher stopped"
+}
+watch_logs() {
+  if watch_unit; then $SUDO journalctl -u $WATCH -n 200 --no-pager -o cat; else tail -n 200 "$DOCLING_HOME/watch.log" 2>/dev/null; fi
+}
+watch_apply() {   # settings changed: rewrite the unit and restart, if the watcher is set up
+  if watch_unit; then step_watch
+  elif watch_running; then watch_start; fi
 }
 
 # --- server control --------------------------------------------------------------------------------------
@@ -232,7 +295,7 @@ healthy() { curl -fsS -m 3 "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1; }
 svc_unit() { has_systemd && [ -f /etc/systemd/system/$SERVICE.service ]; }
 
 server_start() {
-  [ -x "$DOCLING_HOME/vllm/bin/vllm" ] || die "vLLM isn't installed (menu: Install)."
+  [ -x "$DOCLING_HOME/vllm/bin/vllm" ] || { warn "vLLM isn't installed (menu: Install)."; return 1; }
   healthy && { ok "Already running on port $PORT"; return; }
   say "Starting vLLM on 127.0.0.1:$PORT (first start takes a minute or two: CUDA graphs are compiled)"
   if svc_unit; then
@@ -267,6 +330,8 @@ status() {
   [ -x "$DOCLING_HOME/vllm/bin/vllm" ] && echo "vLLM:     installed" || echo "vLLM:     not installed"
   if healthy; then echo "Server:   UP   http://127.0.0.1:$PORT/v1  ($MODEL)"; else echo "Server:   down (port $PORT)"; fi
   svc_unit && echo "Service:  $SERVICE ($(systemctl is-enabled $SERVICE 2>/dev/null), starts on boot)"
+  if watch_running; then echo "Watcher:  UP   $INBOX -> $OUTBOX ($WATCH_FORMATS, engine $WATCH_ENGINE)"
+  else echo "Watcher:  down ($INBOX -> $OUTBOX)"; fi
   echo "Settings: PORT=$PORT GPU_UTIL=$GPU_UTIL BATCH=$(auto_batch) CUDA=$(cuda_flavor)"
   have nvidia-smi && nvidia-smi --query-gpu=memory.used,memory.total,utilization.gpu --format=csv,noheader | sed 's/^/GPU now:  /'
   return 0
@@ -288,21 +353,22 @@ test_run() {
 }
 
 uninstall() {
-  server_stop || true
+  server_stop || true; watch_stop || true
+  if watch_unit; then $SUDO systemctl disable -q $WATCH; $SUDO rm -f /etc/systemd/system/$WATCH.service; $SUDO systemctl daemon-reload; fi
   if svc_unit; then $SUDO systemctl disable -q $SERVICE; $SUDO rm -f /etc/systemd/system/$SERVICE.service; $SUDO systemctl daemon-reload; fi
   rm -f "$HOME/.local/bin/docling-convert" "$HOME/.local/bin/docling"
   rm -rf "$DOCLING_HOME"
-  ok "Removed $DOCLING_HOME, the launchers and the service. Kept: uv, apt packages, the driver, ~/.cache/huggingface."
+  ok "Removed $DOCLING_HOME, the launchers and the services. Kept: your inbox/outbox folders, uv, apt packages, the driver, ~/.cache/huggingface."
 }
 
-ALL_STEPS="preflight apt uv docling vllm models service"
+ALL_STEPS="preflight apt uv docling vllm models service watch"
 install_steps() {   # $@ = steps
   load_conf
   [ "$DRY" = 1 ] || save_conf
   for s in "$@"; do "step_$s"; done
   if [[ " $* " == *" service "* ]] && [ "$DRY" = 0 ] && [ -x "$DOCLING_HOME/vllm/bin/vllm" ]; then server_start || true; fi
   [ "$DRY" = 1 ] && { echo; ok "Dry run: nothing was changed."; return; }
-  echo; ok "Installed. Next:  docling-convert --help   (guide: $DOCLING_HOME/GUIDE.md)"
+  echo; ok "Installed. Drop documents into $INBOX; JSON appears in $OUTBOX. Guide: $DOCLING_HOME/GUIDE.md"
   [[ ":$PATH:" == *":$HOME/.local/bin:"* ]] || warn "Open a new shell (or: export PATH=\$HOME/.local/bin:\$PATH)"
 }
 
@@ -310,7 +376,7 @@ install_steps() {   # $@ = steps
 menu_settings() {
   local v
   v=$(wt --title "Port" --inputbox "Port for the vLLM server (localhost only):" 9 60 "$PORT") && PORT=$v
-  v=$(wt --title "GPU memory" --inputbox "Share of GPU memory vLLM reserves (0.1-0.95).\n0.9 = fastest; lower it (e.g. 0.4) to also run the standard pipeline on the same card:" 11 70 "$GPU_UTIL") && GPU_UTIL=$v
+  v=$(wt --title "GPU memory" --inputbox "Share of GPU memory vLLM reserves (0.1-0.95).\n0.5 leaves room for the standard pipeline (drop folder) on the same card; 0.9 if you only use the vlm engine:" 11 70 "$GPU_UTIL") && GPU_UTIL=$v
   v=$(wt --title "Batch size" --inputbox "Pages in flight per conversion (auto = from VRAM: 64 for 32 GB, 32 for 24 GB, 16 below):" 10 70 "$BATCH") && BATCH=$v
   v=$(wt --title "PyTorch CUDA build" --radiolist "PyTorch wheel for Docling (auto = from your driver: $(cuda_flavor)):" 14 70 5 \
       auto "pick from the driver" "$([ "$CUDA" = auto ] && echo ON || echo OFF)" \
@@ -320,8 +386,43 @@ menu_settings() {
       cpu "CPU only" "$([ "$CUDA" = cpu ] && echo ON || echo OFF)") && CUDA=$v
   save_conf
   if svc_unit; then step_service; wt --yesno "Settings saved. Restart vLLM now to apply them?" 8 60 && server_start_restart; fi
+  watch_apply || true
 }
 server_start_restart() { server_stop; server_start; }
+
+menu_watch() {
+  local c=1 st v
+  while true; do
+    st="stopped"; watch_running && st="RUNNING"
+    c=$(wt --title "Drop folder" --default-item "$c" --menu "Files dropped in the inbox are converted to $WATCH_FORMATS in the outbox.\n\nWatcher: $st\nInbox:   $INBOX\nOutbox:  $OUTBOX\nEngine:  $WATCH_ENGINE\n" 21 78 6 \
+      1 "Start / restart the watcher" \
+      2 "Stop the watcher" \
+      3 "Folders, output format, engine..." \
+      4 "Watcher log" \
+      5 "Latest outputs" \
+      6 "Back") || return 0
+    clear
+    case $c in
+      1) watch_start || true; pause ;;
+      2) watch_stop; pause ;;
+      3) v=$(wt --title "Inbox" --inputbox "Folder to watch (subfolders included):" 9 70 "$INBOX") && INBOX=$v
+         v=$(wt --title "Outbox" --inputbox "Where the converted files go (keep it outside the inbox):" 9 78 "$OUTBOX") && OUTBOX=$v
+         v=$(wt --title "Output" --checklist "Files per document (JSON = DoclingDocument: text, tables, layout, reading order):" 14 78 4 \
+           json "structured JSON for agents/programs" "$([[ " $WATCH_FORMATS " == *" json "* ]] && echo ON || echo OFF)" \
+           md "Markdown (compact, LLM-friendly reading)" "$([[ " $WATCH_FORMATS " == *" md "* ]] && echo ON || echo OFF)" \
+           html "HTML" "$([[ " $WATCH_FORMATS " == *" html "* ]] && echo ON || echo OFF)" \
+           txt "plain text" "$([[ " $WATCH_FORMATS " == *" txt "* ]] && echo ON || echo OFF)") && v=$(echo "$v" | tr -d '"') && [ -n "$v" ] && WATCH_FORMATS=$v
+         v=$(wt --title "Engine" --radiolist "How PDFs and images are read (Office/CSV/HTML don't need it):" 13 78 3 \
+           standard "layout + tables + OCR models (best for digital PDFs)" "$([ "$WATCH_ENGINE" = standard ] && echo ON || echo OFF)" \
+           vlm "granite-docling via vLLM (scans, formulas, code)" "$([ "$WATCH_ENGINE" = vlm ] && echo ON || echo OFF)" \
+           local "granite-docling in-process (no server)" "$([ "$WATCH_ENGINE" = local ] && echo ON || echo OFF)") && WATCH_ENGINE=$v
+         save_conf; watch_apply || true; pause ;;
+      4) watch_logs | tail -60; pause ;;
+      5) ls -lt "$OUTBOX" 2>/dev/null | head -20; pause ;;
+      6) return 0 ;;
+    esac
+  done
+}
 
 pause() { read -rp "Press Enter to return to the menu..." _ </dev/tty; }
 
@@ -330,36 +431,39 @@ menu() {
   local c=1
   while true; do
     detect_gpu
-    local up="down"; healthy && up="UP on :$PORT"
-    c=$(wt --title "Docling RTX setup" --default-item "$c" --menu "GPU: ${GPU_NAME:-none found}${GPU_MB:+ ($(((GPU_MB + 512) / 1024)) GB)}   vLLM: $up\n\nChoose:" 21 76 11 \
+    local up="down" wst="down"; healthy && up="UP on :$PORT"; watch_running && wst="UP"
+    c=$(wt --title "Docling RTX setup" --default-item "$c" --menu "GPU: ${GPU_NAME:-none found}${GPU_MB:+ ($(((GPU_MB + 512) / 1024)) GB)}   vLLM: $up   Drop folder: $wst\n\nChoose:" 22 76 12 \
       1 "Install everything (recommended)" \
       2 "Choose what to install..." \
-      3 "Start vLLM server" \
-      4 "Stop vLLM server" \
-      5 "Status" \
-      6 "Run a test conversion" \
-      7 "Convert a folder of documents..." \
-      8 "Settings (port, GPU memory, batch, CUDA)" \
-      9 "Server log" \
-      10 "How to process documents" \
-      11 "Uninstall") || { clear; exit 0; }
+      3 "Drop folder: inbox -> JSON..." \
+      4 "Start vLLM server" \
+      5 "Stop vLLM server" \
+      6 "Status" \
+      7 "Run a test conversion" \
+      8 "Convert a folder once..." \
+      9 "Settings (port, GPU memory, batch, CUDA)" \
+      10 "vLLM server log" \
+      11 "How to process documents" \
+      12 "Uninstall") || { clear; exit 0; }
     clear
     case $c in
-      1) wt --yesno "Install:\n\n - system packages (apt)\n - uv + Python 3.12\n - Docling with CUDA PyTorch\n - vLLM + granite-docling-258M\n - $SERVICE service, started now\n\nNeeds ~20 GB of disk and sudo. Continue?" 17 64 && { install_steps $ALL_STEPS; pause; } ;;
+      1) wt --yesno "Install:\n\n - system packages (apt)\n - uv + Python 3.12\n - Docling with CUDA PyTorch\n - vLLM + granite-docling-258M ($SERVICE service)\n - drop folder: $INBOX -> $OUTBOX\n   ($WATCH service)\n\nNeeds ~20 GB of disk and sudo. Continue?" 18 66 && { install_steps $ALL_STEPS; pause; } ;;
       2) local picks
-         picks=$(wt --title "Components" --checklist "Space to toggle, Enter to install:" 18 76 8 \
+         picks=$(wt --title "Components" --checklist "Space to toggle, Enter to install:" 19 76 9 \
            driver "NVIDIA driver (Ubuntu, needs a reboot)" OFF \
            apt "System packages" ON \
            uv "uv (Python manager)" ON \
            docling "Docling + CUDA PyTorch" ON \
            vllm "vLLM server engine" ON \
            models "Download granite-docling-258M" ON \
-           service "Run vLLM as a service (systemd)" ON) && { install_steps preflight $(echo "$picks" | tr -d '"'); pause; } ;;
-      3) server_start || true; pause ;;
-      4) server_stop; pause ;;
-      5) status; pause ;;
-      6) test_run || true; pause ;;
-      7) local in outd eng
+           service "Run vLLM as a service (systemd)" ON \
+           watch "Drop folder: inbox -> JSON (service)" ON) && { install_steps preflight $(echo "$picks" | tr -d '"'); pause; } ;;
+      3) menu_watch ;;
+      4) server_start || true; pause ;;
+      5) server_stop; pause ;;
+      6) status; pause ;;
+      7) test_run || true; pause ;;
+      8) local in outd eng
          in=$(wt --inputbox "Folder (or file / URL) to convert:" 9 70 "$HOME/documents") &&
          outd=$(wt --inputbox "Output folder:" 9 70 "$HOME/docling-out") &&
          eng=$(wt --radiolist "Engine:" 13 76 3 \
@@ -367,12 +471,12 @@ menu() {
            vlm "granite-docling via vLLM (scans, formulas, code)" OFF \
            local "granite-docling in-process (no server, slower)" OFF) &&
          { "$HOME/.local/bin/docling-convert" "$in" -o "$outd" --engine "$eng" --batch "$(auto_batch)" \
-             --server "http://127.0.0.1:$PORT/v1/chat/completions" || true; pause; } ;;
-      8) menu_settings ;;
-      9) server_logs | tail -60; pause ;;
-      10) local g=$DOCLING_HOME/GUIDE.md; [ -f "$g" ] || g=$SRC_DIR/GUIDE.md
+             --to json --to md --server "http://127.0.0.1:$PORT/v1/chat/completions" || true; pause; } ;;
+      9) menu_settings ;;
+      10) server_logs | tail -60; pause ;;
+      11) local g=$DOCLING_HOME/GUIDE.md; [ -f "$g" ] || g=$SRC_DIR/GUIDE.md
           if [ -f "$g" ]; then wt --title "GUIDE.md" --scrolltext --textbox "$g" 30 100; else wt --msgbox "GUIDE.md not found." 8 40; fi ;;
-      11) wt --yesno "Remove $DOCLING_HOME, the launchers and the service?\n(Model cache in ~/.cache/huggingface is kept.)" 10 64 && { uninstall; pause; } ;;
+      12) wt --yesno "Remove $DOCLING_HOME, the launchers and the services?\n(Kept: your inbox/outbox and the model cache.)" 10 64 && { uninstall; pause; } ;;
     esac
   done
 }
@@ -399,6 +503,11 @@ case ${args[0]:-} in
   status)  status ;;
   test)    test_run ;;
   logs)    server_logs ;;
+  watch)
+    case ${args[1]:-start} in
+      start) watch_start ;; stop) watch_stop ;; logs) watch_logs ;; restart) watch_stop; watch_start ;;
+      *) die "Use: $0 watch start|stop|restart|logs" ;;
+    esac ;;
   uninstall) uninstall ;;
   "")
     if [ "$DRY" = 1 ]; then install_steps $ALL_STEPS
