@@ -2,6 +2,10 @@
 
 All notable changes to Docling RTX. Install time on a fresh pod: **about 12 minutes**, mostly downloading CUDA PyTorch and Docling's models. Updating reruns the installer, which reuses everything already downloaded: `cd ~/docling-rtx && git pull && ./docling-setup.sh install`.
 
+## 1.4.2 (2026-11-24): status filter
+
+- **Filter the document table by status:** All, Converting, Waiting, Done, Failed and Cancelled chips with live counts. Empty ones are greyed out, and the choice is kept across reloads.
+
 ## 1.4.1 (2026-11-24): folder uploads
 
 - **Upload whole folders.** Drag a folder onto the page, or use **choose a folder**. Every file inside is uploaded with its subfolders, and the outbox mirrors the layout. Before, a dropped folder failed with "Upload failed: <folder> (0)".

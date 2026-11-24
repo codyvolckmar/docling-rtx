@@ -377,6 +377,8 @@ th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line)}th{c
 a{color:var(--acc);text-decoration:none;margin-right:10px}a:hover{text-decoration:underline}.dim{color:var(--dim);font-size:13px}
 button{background:none;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:3px 10px;cursor:pointer}
 button:disabled{opacity:.45;cursor:default}
+.filters{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 10px}.chip{border-radius:99px;font-size:13px;padding:3px 12px;color:var(--dim)}
+.chip b{font-weight:600;margin-left:4px;color:var(--text)}.chip.on{border-color:var(--acc);background:#5b9dff22;color:var(--text)}
 .row{display:flex;justify-content:space-between;align-items:center;margin:22px 0 10px}.err{color:var(--bad);font-size:12px;max-width:420px}
 </style></head><body><main>
 <header><h1><img src="/logo.png" alt="" onerror="this.remove()">Docling RTX</h1><div class="pills" id="pills"></div></header>
@@ -387,12 +389,15 @@ button:disabled{opacity:.45;cursor:default}
 <div id="up"></div><div id="cur"></div>
 <div class="row"><b>Documents</b><span><button id="clear" onclick="clearDone()" title="Move finished documents to the archive folder; their JSON stays in the outbox">Clear finished</button>
 <a href="/download/outbox.zip" style="margin-left:14px">Download all results (.zip)</a></span></div>
+<div class="filters" id="filters"></div>
 <table><thead><tr><th>Document</th><th>Status</th><th>Pages</th><th>Time</th><th>Results</th></tr></thead><tbody id="docs"></tbody></table>
 <p class="dim" id="paths"></p>
 </main><script>
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const enc=p=>String(p).split('/').map(encodeURIComponent).join('/');   // safe for '#', '?', '&', "'", '+' in names
 document.addEventListener('click',e=>{if(e.target.closest('button[data-close]')){$('#up').innerHTML='';return}
+  const fb=e.target.closest('button[data-filter]');
+  if(fb){FILTER=fb.dataset.filter;localStorage.setItem('drtx-filter',FILTER);refresh();return}
   const c=e.target.closest('button[data-copy]');
   if(c){navigator.clipboard.writeText($('#pub').textContent).then(()=>{c.textContent='copied';setTimeout(()=>c.textContent='copy',1500)});return}
   const b=e.target.closest('button[data-act]');if(!b||b.disabled)return;
@@ -423,7 +428,12 @@ async function refresh(){
     $('#cur').innerHTML=`<div class="cur"><div class="curhead"><b>Converting ${esc(c.file)}</b>${d?`<button class="stop" ${stopping?'disabled':''} data-act="cancel" data-n="${esc(d.name)}">${stopping?'Cancelling&hellip;':'Cancel'}</button>`:''}</div><div class="bar"><i style="width:${pct}%"></i></div>
     <span class="dim">${c.pages_total?`page ${c.pages_done} of ${c.pages_total} &middot; `:'loading models / reading the file&hellip; &middot; '}${secs(c.elapsed)} so far${left!=null?` &middot; about ${secs(left)} left`:''}${first}</span></div>`;
   } else $('#cur').innerHTML='';
-  $('#docs').innerHTML=s.docs.length?s.docs.map(d=>`<tr><td>${esc(d.name)}<br><span class="dim">${size(d.size)}</span></td>
+  const counts={all:s.docs.length};for(const d of s.docs)counts[d.status]=(counts[d.status]||0)+1;
+  if(FILTER!='all'&&!counts[FILTER])FILTER='all';   // a filter that became empty: show everything again
+  $('#filters').innerHTML=s.docs.length?['all','converting','waiting','done','failed','cancelled'].map(k=>
+    `<button class="chip ${FILTER==k?'on':''}" data-filter="${k}" ${k!='all'&&!counts[k]?'disabled':''}>${k[0].toUpperCase()+k.slice(1)}<b>${counts[k]||0}</b></button>`).join(''):'';
+  const shown=s.docs.filter(d=>FILTER=='all'||d.status==FILTER);
+  $('#docs').innerHTML=shown.length?shown.map(d=>`<tr><td>${esc(d.name)}<br><span class="dim">${size(d.size)}</span></td>
     <td><span class="st ${d.status}">${d.status}</span>${d.status=='failed'&&d.error?`<div class="err" title="${esc(d.error)}">${esc(why(d.error))}</div>`:''}</td>
     <td>${d.pages||''}</td><td>${d.seconds==null?'':d.seconds<1?'&lt;1s':secs(d.seconds)}</td>
     <td>${Object.entries(d.files).filter(([f])=>f!='error.json').map(([f,p])=>`<a href="/files/${enc(p)}">${f}</a>`).join('')}
@@ -431,7 +441,7 @@ async function refresh(){
     ${d.status=='failed'||d.status=='cancelled'?`<button data-act="retry" data-n="${esc(d.name)}">${d.status=='cancelled'?'convert':'retry'}</button>`:''}
     ${['done','failed','cancelled'].includes(d.status)?`<button title="Remove from the list (the source moves to the archive, the JSON stays)" data-act="remove" data-n="${esc(d.name)}">&times;</button>`:''}
     ${d.status=='converting'||d.status=='waiting'?`<button class="stop" ${d.cancelling?'disabled':''} data-act="cancel" data-n="${esc(d.name)}">${d.cancelling?'cancelling&hellip;':'cancel'}</button>`:''}</td></tr>`).join('')
-    :'<tr><td colspan="5" class="dim">No documents yet. Drop some above.</td></tr>';
+    :`<tr><td colspan="5" class="dim">${s.docs.length?'Nothing with this status.':'No documents yet. Drop some above.'}</td></tr>`;
   $('#share').innerHTML=s.public_url?`<div class="share"><span>Public link</span><code id="pub">${esc(s.public_url)}</code>
     <button data-copy="1" title="Anyone with this link (its key included) can use this page. It changes when the tunnel restarts.">copy</button></div>`:'';
   $('#paths').textContent=`Inbox: ${s.inbox}   Outbox: ${s.outbox}   Cleared documents: ${s.archive}`;
@@ -453,6 +463,7 @@ async function removeDoc(n){const r=await fetch('/remove/'+enc(n),{method:'POST'
 async function retry(n){await fetch('/retry/'+enc(n),{method:'POST'});refresh()}
 async function cancelDoc(n){if(!confirm('Stop converting '+n+'?\nIts pages done so far are discarded. You can convert it again later.'))return;
   await fetch('/cancel/'+enc(n),{method:'POST'});refresh()}
+let FILTER=localStorage.getItem('drtx-filter')||'all';   // status filter for the table, kept across reloads
 let SUPPORTED=null;   // file extensions Docling reads (from /api/state)
 const ext=n=>{const i=n.lastIndexOf('.');return i>0?n.slice(i).toLowerCase():''};
 async function filesFrom(dt){   // dropped files and folders -> [{file, path}] (folders walked recursively)
