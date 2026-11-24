@@ -34,7 +34,7 @@ _gpu = {"t": 0, "v": None}
 
 
 def gpu():
-    if time.time() - _gpu["t"] > 3:
+    if time.time() - _gpu["t"] > 1.5:
         try:
             out = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.used,memory.total,utilization.gpu",
                                   "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=5).stdout
@@ -44,6 +44,65 @@ def gpu():
             _gpu["v"] = None
         _gpu["t"] = time.time()
     return _gpu["v"]
+
+
+CGROUP = Path("/sys/fs/cgroup")
+_cpu = {"prev": None}
+
+
+def _read(path):
+    try:
+        return Path(path).read_text().strip()
+    except Exception:
+        return None
+
+
+def cpu_percent():
+    """CPU use since the previous call, as a share of the CPUs this machine (or container) may use.
+    Containers: cgroup v2 cpu.stat / cpu.max (a rented pod's /proc/stat shows the whole host)."""
+    now = time.monotonic()
+    stat, limit = _read(CGROUP / "cpu.stat"), _read(CGROUP / "cpu.max")
+    if stat and limit:   # cgroup v2 with its own CPU accounting
+        used = int(next(line.split()[1] for line in stat.splitlines() if line.startswith("usage_usec"))) / 1e6
+        quota, period = (limit.split() + ["100000"])[:2]
+        cores = int(quota) / int(period) if quota != "max" else (os.cpu_count() or 1)
+        sample = ("cg", now, used, cores)
+    else:                # /proc/stat: busy and total jiffies of the whole machine
+        f = [int(x) for x in (_read("/proc/stat") or "cpu 0 0 0 0").splitlines()[0].split()[1:9]]
+        sample = ("proc", sum(f) - f[3] - f[4], sum(f), os.cpu_count() or 1)
+    prev, _cpu["prev"] = _cpu["prev"], sample
+    if not prev or prev[0] != sample[0]:
+        return None, sample[3]
+    if sample[0] == "cg":
+        dt = sample[1] - prev[1]
+        pct = 100 * (sample[2] - prev[2]) / (dt * sample[3]) if dt > 0 else None
+    else:
+        dt = sample[2] - prev[2]
+        pct = 100 * (sample[1] - prev[1]) / dt if dt > 0 else None
+    return (None if pct is None else max(0.0, min(100.0, pct))), sample[3]
+
+
+def memory():
+    """(used MB, total MB). Containers: cgroup v2 memory.current minus reclaimable file cache, against memory.max
+    (as `docker stats` does); otherwise /proc/meminfo MemTotal - MemAvailable."""
+    cur, lim = _read(CGROUP / "memory.current"), _read(CGROUP / "memory.max")
+    info = {}
+    for line in (_read("/proc/meminfo") or "").splitlines():
+        k, _, v = line.partition(":")
+        info[k] = int(v.split()[0]) * 1024 if v.split() else 0
+    if cur and lim and lim != "max":
+        inactive = next((int(line.split()[1]) for line in (_read(CGROUP / "memory.stat") or "").splitlines()
+                         if line.startswith("inactive_file ")), 0)
+        return (int(cur) - inactive) / 2**20, min(int(lim), info.get("MemTotal", int(lim))) / 2**20
+    total = info.get("MemTotal", 0)
+    return (total - info.get("MemAvailable", total)) / 2**20, total / 2**20
+
+
+def system():
+    cpu, cores = cpu_percent()
+    used, total = memory()
+    return {"cpu": None if cpu is None else round(cpu), "cores": round(cores, 1), "mem_used_mb": round(used),
+            "mem_total_mb": round(total)}
 
 
 def vllm_up():
@@ -111,7 +170,7 @@ def state():
         cur["elapsed"] = time.time() - (st.get("started") or time.time())
     return {"watcher": watcher, "current": cur, "vllm": vllm_up(), "gpu": gpu(), "docs": docs,
             "archive": str(Path(A.archive).expanduser()),
-            "device": st.get("device"), "batch": A.batch,
+            "device": st.get("device"), "batch": A.batch, "sys": system(),
             "inbox": str(inbox), "outbox": str(outbox)}
 
 
@@ -244,12 +303,18 @@ th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line)}th{c
 .st{font-size:13px;font-weight:600}.done{color:var(--ok)}.failed{color:var(--bad)}.waiting{color:var(--warn)}.converting{color:var(--acc)}.cancelled{color:var(--dim)}
 .cpu{border-color:var(--bad);color:var(--bad)}.stop{border-color:#ff6b6b88;color:#ffb3b3}.stop:hover{background:#ff6b6b22}
 .curhead{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:9px 12px}
+.stat .k{display:flex;justify-content:space-between;font-size:12px;color:var(--dim)}.stat .k b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums}
+.meter{height:6px;background:var(--line);border-radius:99px;overflow:hidden;margin-top:7px}.meter i{display:block;height:100%;border-radius:99px;transition:width .6s,background .6s}
+@media(max-width:640px){.stats{grid-template-columns:repeat(2,1fr)}}
 a{color:var(--acc);text-decoration:none;margin-right:10px}a:hover{text-decoration:underline}.dim{color:var(--dim);font-size:13px}
 button{background:none;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:3px 10px;cursor:pointer}
 button:disabled{opacity:.45;cursor:default}
 .row{display:flex;justify-content:space-between;align-items:center;margin:22px 0 10px}.err{color:var(--bad);font-size:12px;max-width:420px}
 </style></head><body><main>
 <header><h1>Docling RTX</h1><div class="pills" id="pills"></div></header>
+<div class="stats" id="stats"></div>
 <div id="drop"><b>Drop documents here</b> or click to choose<br><span class="dim">PDF, Word, Excel, PowerPoint, CSV, HTML, images, email&hellip; Each one becomes structured JSON.</span>
 <input type="file" id="pick" multiple hidden></div>
 <div id="up"></div><div id="cur"></div>
@@ -267,7 +332,15 @@ async function refresh(){
   $('#pills').innerHTML=`<span class="pill"><span class="dot ${w[0]}"></span>${w[1]}</span>`+
     (s.device=='cpu'?`<span class="pill cpu" title="PyTorch has no CUDA in the converter: run docling-rtx status">&#9888; converter on CPU (slow)</span>`:s.device=='cuda'?`<span class="pill"><span class="dot on"></span>converter on GPU</span>`:'')+
     `<span class="pill"><span class="dot ${s.vllm?'on':''}"></span>VLM server ${s.vllm?'up':'off'}</span>`+
-    (s.gpu?`<span class="pill"><b>${esc(s.gpu.name)}</b> &middot; ${(s.gpu.used_mb/1024).toFixed(1)}/${(s.gpu.total_mb/1024).toFixed(0)} GB &middot; ${s.gpu.util}%</span>`:'<span class="pill">no GPU</span>');
+    (s.gpu?`<span class="pill"><b>${esc(s.gpu.name)}</b></span>`:'<span class="pill">no GPU</span>');
+  const gb=mb=>(mb/1024).toFixed(1), y=s.sys||{};
+  const tile=(k,pct,txt,title)=>{const c=pct==null?'var(--line)':pct>=90?'var(--bad)':pct>=70?'var(--warn)':'var(--acc)';
+    return `<div class="stat" title="${title}"><div class="k">${k}<b>${txt}</b></div><div class="meter"><i style="width:${pct??0}%;background:${c}"></i></div></div>`};
+  $('#stats').innerHTML=
+    tile('CPU',y.cpu,y.cpu==null?'&hellip;':y.cpu+'%',`${y.cores} CPUs available to this machine/container`)+
+    tile('RAM',y.mem_total_mb?100*y.mem_used_mb/y.mem_total_mb:null,y.mem_total_mb?`${gb(y.mem_used_mb)} / ${gb(y.mem_total_mb)} GB`:'n/a','System memory in use')+
+    tile('GPU',s.gpu?s.gpu.util:null,s.gpu?s.gpu.util+'%':'n/a','GPU utilization (nvidia-smi)')+
+    tile('VRAM',s.gpu?100*s.gpu.used_mb/s.gpu.total_mb:null,s.gpu?`${gb(s.gpu.used_mb)} / ${gb(s.gpu.total_mb)} GB`:'n/a','GPU memory in use (vLLM reserves its share up front)');
   const c=s.current;
   if(c){const pct=c.pages_total?100*c.pages_done/c.pages_total:0, rate=c.pages_done/Math.max(c.elapsed,1);
     const left=c.pages_total&&c.pages_done?(c.pages_total-c.pages_done)/rate:null;
