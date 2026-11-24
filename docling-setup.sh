@@ -47,7 +47,15 @@ die()  { printf '\033[1;31mERR\033[0m %s\n' "$*" >&2; exit 1; }
 run()  { if [ "$DRY" = 1 ]; then echo "   [dry-run] $*"; else "$@"; fi; }
 have() { command -v "$1" >/dev/null 2>&1; }
 SUDO=""; [ "$(id -u)" = 0 ] || SUDO=sudo
-interactive() { [ -t 1 ] && [ -r /dev/tty ] && have whiptail; }
+interactive() { [ -t 1 ] && [ -r /dev/tty ]; }
+need_whiptail() {   # minimal images (Docker, rented pods) don't ship it, and the menu is what installs things
+  case ${TERM:-} in ""|dumb) export TERM=xterm ;; esac
+  have whiptail && return
+  have apt-get || die "The menu needs whiptail: install it (package 'newt'/'whiptail'), or run '$0 install'."
+  say "Installing whiptail for the menu"
+  $SUDO apt-get update -q >/dev/null && $SUDO apt-get install -y -q whiptail >/dev/null \
+    || die "Couldn't install whiptail. Run '$0 install' (no menu) instead."
+}
 wt() { whiptail --backtitle "Docling RTX setup $VERSION" "$@" 3>&1 1>&2 2>&3 </dev/tty; }
 
 load_conf() {   # environment beats config.env beats defaults
@@ -511,7 +519,7 @@ case ${args[0]:-} in
   uninstall) uninstall ;;
   "")
     if [ "$DRY" = 1 ]; then install_steps $ALL_STEPS
-    elif interactive; then menu
-    else die "No terminal for the menu: use '$0 install' (or --help)."; fi ;;
+    elif interactive; then need_whiptail; menu
+    else die "No terminal for the menu (stdout isn't a terminal): use '$0 install' (or --help)."; fi ;;
   *) die "Unknown command: ${args[0]} (see --help)" ;;
 esac
