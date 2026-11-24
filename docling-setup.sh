@@ -368,7 +368,7 @@ watch_apply() {   # settings changed: rewrite the unit and restart, if the watch
 # Web page: drag & drop upload, live progress, downloads (web.py)
 web_cmd() {
   echo "$DOCLING_HOME/venv/bin/python $DOCLING_HOME/web.py --inbox $INBOX --outbox $OUTBOX" \
-       "--status-file $DOCLING_HOME/watch-status.json --host $WEB_HOST --port $WEB_PORT --vllm-port $PORT --batch $(auto_batch)"
+       "--status-file $DOCLING_HOME/watch-status.json --host $WEB_HOST --port $WEB_PORT --vllm-port $PORT --config $CONF --batch $(auto_batch)"
 }
 web_token() {     # only when the page listens beyond localhost (docling-rtx web public)
   [ "$WEB_HOST" = 127.0.0.1 ] && return 0

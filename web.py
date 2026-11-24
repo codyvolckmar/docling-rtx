@@ -105,9 +105,23 @@ def system():
             "mem_total_mb": round(total)}
 
 
-def vllm_up():
+_direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))   # localhost: never through http_proxy
+
+
+def vllm_port():
+    """The vLLM port from the saved settings, read on every check: changing it in docling-rtx Settings must not
+    leave this page looking at the old port. Falls back to --vllm-port."""
+    for line in (_read(Path(A.config).expanduser()) or "").splitlines():
+        if line.startswith("PORT="):
+            v = line.split("=", 1)[1].strip().strip('"')
+            if v.isdigit():
+                return int(v)
+    return A.vllm_port
+
+
+def vllm_up(port):
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{A.vllm_port}/v1/models", timeout=1) as r:
+        with _direct.open(f"http://127.0.0.1:{port}/v1/models", timeout=3) as r:
             return r.status == 200
     except Exception:
         return False
@@ -168,7 +182,8 @@ def state():
     if watcher == "converting":
         cur = {k: st.get(k) for k in ("file", "key", "pages_done", "pages_total", "started")}
         cur["elapsed"] = time.time() - (st.get("started") or time.time())
-    return {"watcher": watcher, "current": cur, "vllm": vllm_up(), "gpu": gpu(), "docs": docs,
+    port = vllm_port()
+    return {"watcher": watcher, "current": cur, "vllm": vllm_up(port), "vllm_port": port, "gpu": gpu(), "docs": docs,
             "archive": str(Path(A.archive).expanduser()),
             "device": st.get("device"), "batch": A.batch, "sys": system(),
             "inbox": str(inbox), "outbox": str(outbox)}
@@ -338,7 +353,7 @@ async function refresh(){
   const w={converting:['busy','converting'],watching:['on','watching the inbox'],stopped:['off','watcher stopped: run docling-rtx watch start']}[s.watcher];
   $('#pills').innerHTML=`<span class="pill"><span class="dot ${w[0]}"></span>${w[1]}</span>`+
     (s.device=='cpu'?`<span class="pill cpu" title="PyTorch has no CUDA in the converter: run docling-rtx status">&#9888; converter on CPU (slow)</span>`:s.device=='cuda'?`<span class="pill"><span class="dot on"></span>converter on GPU</span>`:'')+
-    `<span class="pill"><span class="dot ${s.vllm?'on':''}"></span>VLM server ${s.vllm?'up':'off'}</span>`+
+    `<span class="pill" title="${s.vllm?`vLLM answers on 127.0.0.1:${s.vllm_port}`:`Nothing answers on 127.0.0.1:${s.vllm_port}/v1/models. Start it: docling-rtx start. Status and log: docling-rtx status / docling-rtx logs`}"><span class="dot ${s.vllm?'on':''}"></span>VLM server ${s.vllm?'up':'off'} &middot; :${s.vllm_port}</span>`+
     (s.gpu?`<span class="pill"><b>${esc(s.gpu.name)}</b></span>`:'<span class="pill">no GPU</span>');
   const gb=mb=>(mb/1024).toFixed(1), y=s.sys||{};
   const tile=(k,pct,txt,title)=>{const c=pct==null?'var(--line)':pct>=90?'var(--bad)':pct>=70?'var(--warn)':'var(--acc)';
@@ -410,7 +425,8 @@ def main():
     ap.add_argument("--status-file", default="~/.docling-rtx/watch-status.json")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8080)
-    ap.add_argument("--vllm-port", type=int, default=8000)
+    ap.add_argument("--vllm-port", type=int, default=8000, help="used when --config has no PORT")
+    ap.add_argument("--config", default="~/.docling-rtx/config.env", help="docling-rtx settings (for the vLLM port)")
     ap.add_argument("--token", default=os.environ.get("DOCLING_WEB_TOKEN", ""))
     ap.add_argument("--batch", type=int, default=0, help="the converter's batch size (shown while page 1 is pending)")
     A = ap.parse_args()
