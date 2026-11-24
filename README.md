@@ -1,4 +1,4 @@
-# Docling RTX
+# <img src="logo.png" width="56" align="center" alt=""> Docling RTX
 
 **One command turns a rented or local Linux box with an NVIDIA GPU into a document-processing machine.** Drag PDFs, CSVs, Office files, HTML or images onto a web page (or drop them in a folder), and structured JSON for your AI agent comes out.
 

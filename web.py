@@ -191,7 +191,8 @@ class H(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        if "Cache-Control" not in (extra or {}):
+            self.send_header("Cache-Control", "no-store")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -210,6 +211,11 @@ class H(BaseHTTPRequestHandler):
             return self.send(302, extra={"Location": "/", "Set-Cookie": f"drtx={A.token}; HttpOnly; SameSite=Strict; Path=/"})
         if path == "/":
             return self.send(200, PAGE.encode(), "text/html; charset=utf-8")
+        if path in ("/logo.png", "/favicon.ico"):   # next to web.py (the installer copies it)
+            logo = Path(__file__).resolve().parent / "logo.png"
+            if not logo.is_file():
+                return self.send(404, b"no logo")
+            return self.send(200, logo.read_bytes(), "image/png", {"Cache-Control": "max-age=86400"})
         if path == "/api/state":
             return self.send(200, json.dumps(state()).encode(), "application/json")
         if path.startswith("/files/"):
@@ -287,10 +293,11 @@ class H(BaseHTTPRequestHandler):
 
 
 PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Docling RTX</title><style>
+<title>Docling RTX</title><link rel="icon" type="image/png" href="/logo.png"><style>
 :root{--bg:#0b1020;--card:#141b2e;--line:#26304a;--text:#e6e9f2;--dim:#8b93a7;--acc:#5b9dff;--ok:#3ecf8e;--bad:#ff6b6b;--warn:#f5b942}
 *{box-sizing:border-box}body{margin:0;font:15px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--text)}
-main{max-width:1000px;margin:0 auto;padding:24px}h1{font-size:22px;margin:0}header{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+main{max-width:1000px;margin:0 auto;padding:24px}h1{font-size:22px;margin:0;display:flex;align-items:center;gap:12px}
+h1 img{width:52px;height:52px;filter:drop-shadow(0 2px 8px #0008)}header{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
 .pills{display:flex;gap:8px;flex-wrap:wrap}.pill{background:var(--card);border:1px solid var(--line);border-radius:99px;padding:4px 12px;font-size:13px;color:var(--dim)}
 .pill b{color:var(--text);font-weight:600}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--dim)}
 .on{background:var(--ok)}.busy{background:var(--acc)}.off{background:var(--bad)}
@@ -313,7 +320,7 @@ button{background:none;border:1px solid var(--line);color:var(--text);border-rad
 button:disabled{opacity:.45;cursor:default}
 .row{display:flex;justify-content:space-between;align-items:center;margin:22px 0 10px}.err{color:var(--bad);font-size:12px;max-width:420px}
 </style></head><body><main>
-<header><h1>Docling RTX</h1><div class="pills" id="pills"></div></header>
+<header><h1><img src="/logo.png" alt="" onerror="this.remove()">Docling RTX</h1><div class="pills" id="pills"></div></header>
 <div class="stats" id="stats"></div>
 <div id="drop"><b>Drop documents here</b> or click to choose<br><span class="dim">PDF, Word, Excel, PowerPoint, CSV, HTML, images, email&hellip; Each one becomes structured JSON.</span>
 <input type="file" id="pick" multiple hidden></div>

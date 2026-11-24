@@ -197,7 +197,7 @@ EOF
 install_launchers() {   # app files into $DOCLING_HOME, so the commands keep working without the cloned repo
   local f
   run mkdir -p "$DOCLING_HOME" "$HOME/.local/bin"
-  for f in convert.py web.py GUIDE.md docling-setup.sh; do
+  for f in convert.py web.py logo.png GUIDE.md docling-setup.sh; do
     if [ -f "$SRC_DIR/$f" ]; then [ "$SRC_DIR/$f" -ef "$DOCLING_HOME/$f" ] || run cp "$SRC_DIR/$f" "$DOCLING_HOME/$f"
     elif [ -n "$REPO_RAW" ]; then run curl -fsSL "$REPO_RAW/$f" -o "$DOCLING_HOME/$f"
     else warn "$f not found next to this script (set REPO_RAW=... to download it)."; fi
