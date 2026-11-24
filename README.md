@@ -13,7 +13,7 @@ Forked from [Summon](https://github.com/codyvolckmar/summon), keeping its approa
 Ubuntu 22.04/24.04 or Debian 12 (WSL 2 works too), an NVIDIA RTX GPU, ~20 GB of disk and sudo:
 
 ```bash
-git clone <this repo> docling-rtx && cd docling-rtx
+git clone https://github.com/codyvolckmar/docling-rtx && cd docling-rtx
 ./docling-setup.sh            # menu -> 1 "Install everything"
 ./docling-setup.sh install    # or: the same without questions
 ```

@@ -34,7 +34,7 @@ CONF=$DOCLING_HOME/config.env
 LOG=$DOCLING_HOME/install.log
 SERVICE=docling-vllm
 SRC_DIR=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || pwd)
-REPO_RAW=${REPO_RAW:-}   # where to fetch convert.py when this script runs without the repo next to it
+REPO_RAW=${REPO_RAW:-https://raw.githubusercontent.com/codyvolckmar/docling-rtx/main}   # where to fetch convert.py when this script runs without the repo next to it
 TEST_URL=https://arxiv.org/pdf/2501.17887   # the Docling paper, as in the model card's examples
 export PATH="$HOME/.local/bin:$PATH" HF_HUB_DISABLE_TELEMETRY=1 DO_NOT_TRACK=1
 DRY=0
