@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # One-line installer for Docling RTX:
 #   curl -fsSL https://raw.githubusercontent.com/codyvolckmar/docling-rtx/main/install.sh | bash
-# Clones (or updates) the repo into ~/docling-rtx and runs the full install without questions.
+# Clones (or updates) the repo into ~/docling-rtx and runs the full install without questions (~12 min on a
+# fresh pod, mostly downloads). It ends with a public https link to the web page (Cloudflare quick tunnel).
 # Then: open the web page it prints, or run  docling-rtx  for the menu.
 set -euo pipefail
 REPO=${REPO:-https://github.com/codyvolckmar/docling-rtx}

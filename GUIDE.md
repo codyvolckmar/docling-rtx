@@ -156,12 +156,15 @@ The plain Docling CLI is installed as `docling` too, for example `docling --pipe
 
 ## 7. Use it from another machine
 
-The server listens on `127.0.0.1` only, on purpose: it has no API key. To reach it from your laptop, tunnel over SSH:
+**The public link (default).** The install starts a Cloudflare quick tunnel, and `docling-rtx web url` prints `https://<random>.trycloudflare.com/?token=...`. Open it anywhere. The key in the link is the lock: anyone who has the whole link can use the page, and without the key the page answers 403. The address changes when the tunnel restarts (a reboot, or `docling-rtx web tunnel on`), and the page shows the current one with a copy button. Uploads through the tunnel are limited to 100 MB per file, so copy bigger files into the inbox with scp. `docling-rtx web tunnel off` removes the public link.
+
+**SSH tunnel (private).** With the public link off, the page listens on the server only:
 
 ```bash
-ssh -N -L 8000:127.0.0.1:8000 user@gpu-box
-docling-convert scans/ --engine vlm      # on the laptop, with docling installed there
+ssh -N -L 8080:127.0.0.1:8080 user@gpu-box     # then open http://localhost:8080
 ```
+
+The VLM server (vLLM) never leaves 127.0.0.1. It has no key, so reach it through SSH: `ssh -N -L 8000:127.0.0.1:8000 user@gpu-box`, then `docling-convert scans/ --engine vlm` on your laptop.
 
 ## 8. Troubleshooting
 

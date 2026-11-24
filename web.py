@@ -14,6 +14,7 @@ import argparse
 import hmac
 import json
 import os
+import re
 import shutil
 import tempfile
 import subprocess
@@ -154,6 +155,14 @@ def poke(rel):
         pass
 
 
+def public_url():
+    """The Cloudflare quick tunnel's current address, from cloudflared's log (it changes on every restart)."""
+    if not A.tunnel_log:
+        return None
+    found = re.findall(r"https://[a-z0-9-]+\.trycloudflare\.com", _read(Path(A.tunnel_log).expanduser()) or "")
+    return found[-1] if found else None
+
+
 def state():
     inbox, outbox = Path(A.inbox).expanduser(), Path(A.outbox).expanduser()
     try:
@@ -195,6 +204,7 @@ def state():
     return {"watcher": watcher, "current": cur, "vllm": vllm_up(port), "vllm_port": port, "gpu": gpu(), "docs": docs,
             "archive": str(Path(A.archive).expanduser()),
             "device": st.get("device"), "batch": A.batch, "sys": system(),
+            "public_url": (lambda u: u and u + "/?token=" + quote(A.token))(public_url()) if A.token else None,
             "inbox": str(inbox), "outbox": str(outbox)}
 
 
@@ -350,6 +360,8 @@ th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line)}th{c
 .st{font-size:13px;font-weight:600}.done{color:var(--ok)}.failed{color:var(--bad)}.waiting{color:var(--warn)}.converting{color:var(--acc)}.cancelled{color:var(--dim)}
 .cpu{border-color:var(--bad);color:var(--bad)}.stop{border-color:#ff6b6b88;color:#ffb3b3}.stop:hover{background:#ff6b6b22}
 .curhead{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.share{display:flex;align-items:center;gap:10px;margin-top:12px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px 12px;font-size:13px}
+.share code{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}.share span{color:var(--dim)}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px}
 .stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:9px 12px}
 .stat .k{display:flex;justify-content:space-between;font-size:12px;color:var(--dim)}.stat .k b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums}
@@ -362,6 +374,7 @@ button:disabled{opacity:.45;cursor:default}
 </style></head><body><main>
 <header><h1><img src="/logo.png" alt="" onerror="this.remove()">Docling RTX</h1><div class="pills" id="pills"></div></header>
 <div class="stats" id="stats"></div>
+<div id="share"></div>
 <div id="drop"><b>Drop documents here</b> or click to choose<br><span class="dim">PDF, Word, Excel, PowerPoint, CSV, HTML, images, email&hellip; Each one becomes structured JSON.</span>
 <input type="file" id="pick" multiple hidden></div>
 <div id="up"></div><div id="cur"></div>
@@ -372,7 +385,9 @@ button:disabled{opacity:.45;cursor:default}
 </main><script>
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const enc=p=>String(p).split('/').map(encodeURIComponent).join('/');   // safe for '#', '?', '&', "'", '+' in names
-document.addEventListener('click',e=>{const b=e.target.closest('button[data-act]');if(!b||b.disabled)return;
+document.addEventListener('click',e=>{const c=e.target.closest('button[data-copy]');
+  if(c){navigator.clipboard.writeText($('#pub').textContent).then(()=>{c.textContent='copied';setTimeout(()=>c.textContent='copy',1500)});return}
+  const b=e.target.closest('button[data-act]');if(!b||b.disabled)return;
   ({cancel:cancelDoc,retry:retry,remove:removeDoc})[b.dataset.act](b.dataset.n)});
 const secs=t=>t==null?'':t<60?Math.round(t)+'s':t<3600?Math.floor(t/60)+'m '+String(Math.round(t%60)).padStart(2,'0')+'s':Math.floor(t/3600)+'h '+String(Math.floor(t%3600/60)).padStart(2,'0')+'m';
 const size=b=>b<1e6?(b/1e3).toFixed(0)+' KB':(b/1e6).toFixed(1)+' MB';
@@ -408,6 +423,8 @@ async function refresh(){
     ${['done','failed','cancelled'].includes(d.status)?`<button title="Remove from the list (the source moves to the archive, the JSON stays)" data-act="remove" data-n="${esc(d.name)}">&times;</button>`:''}
     ${d.status=='converting'||d.status=='waiting'?`<button class="stop" ${d.cancelling?'disabled':''} data-act="cancel" data-n="${esc(d.name)}">${d.cancelling?'cancelling&hellip;':'cancel'}</button>`:''}</td></tr>`).join('')
     :'<tr><td colspan="5" class="dim">No documents yet. Drop some above.</td></tr>';
+  $('#share').innerHTML=s.public_url?`<div class="share"><span>Public link</span><code id="pub">${esc(s.public_url)}</code>
+    <button data-copy="1" title="Anyone with this link (its key included) can use this page. It changes when the tunnel restarts.">copy</button></div>`:'';
   $('#paths').textContent=`Inbox: ${s.inbox}   Outbox: ${s.outbox}   Cleared documents: ${s.archive}`;
   const fin=s.docs.filter(d=>['done','failed','cancelled'].includes(d.status)).length;
   $('#clear').disabled=!fin; $('#clear').textContent=fin?`Clear finished (${fin})`:'Clear finished';
@@ -428,7 +445,9 @@ async function retry(n){await fetch('/retry/'+enc(n),{method:'POST'});refresh()}
 async function cancelDoc(n){if(!confirm('Stop converting '+n+'?\nIts pages done so far are discarded. You can convert it again later.'))return;
   await fetch('/cancel/'+enc(n),{method:'POST'});refresh()}
 async function upload(files){
+  const viaTunnel=location.hostname.endsWith('.trycloudflare.com');
   for(const f of files){
+    if(viaTunnel&&f.size>100e6){alert(f.name+' is '+size(f.size)+': files over 100 MB can\'t pass the Cloudflare tunnel.\nCopy it into the inbox folder instead (scp), or use an SSH tunnel.');continue}
     $('#up').innerHTML=`<div class="cur">Uploading <b>${esc(f.name)}</b> (${size(f.size)})&hellip;<div class="bar"><i id="ub" style="width:0"></i></div></div>`;
     await new Promise(ok=>{const x=new XMLHttpRequest();x.open('PUT','/upload/'+encodeURIComponent(f.name));
       x.upload.onprogress=e=>{const b=$('#ub');if(b&&e.lengthComputable)b.style.width=(100*e.loaded/e.total)+'%'};
@@ -456,6 +475,7 @@ def main():
     ap.add_argument("--vllm-port", type=int, default=8000, help="used when --config has no PORT")
     ap.add_argument("--config", default="~/.docling-rtx/config.env", help="docling-rtx settings (for the vLLM port)")
     ap.add_argument("--token", default=os.environ.get("DOCLING_WEB_TOKEN", ""))
+    ap.add_argument("--tunnel-log", default=None, help="cloudflared's log: the page shows its public https link")
     ap.add_argument("--batch", type=int, default=0, help="the converter's batch size (shown while page 1 is pending)")
     A = ap.parse_args()
     A.archive = A.archive or str(Path(A.inbox).expanduser().parent / "archive")

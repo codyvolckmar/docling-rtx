@@ -11,6 +11,7 @@
 #   ./docling-setup.sh howto         where the web page is and how to use it
 #   ./docling-setup.sh web [url|start|stop|logs|public|private]   drag & drop page (public = direct link + key)
 #   ./docling-setup.sh web port 8080 [41234]   the page's port [and the public port your provider maps it to]
+#   ./docling-setup.sh web tunnel on|off      public https link through a Cloudflare quick tunnel (default: on)
 #   ./docling-setup.sh start|stop|restart|status|test|logs|uninstall      (the vLLM server)
 #   ./docling-setup.sh watch start|stop|logs   the drop folder: files put in INBOX come out as JSON in OUTBOX
 #   ./docling-setup.sh --dry-run     show what install would do, change nothing
@@ -33,7 +34,7 @@
 #   DOCLING_GPU="RTX 4090:24564:575.64"   pretend this GPU (name:MB:driver), for --dry-run previews
 set -euo pipefail
 
-VERSION=1.3.0
+VERSION=1.4.0
 MODEL=ibm-granite/granite-docling-258M
 MODEL_REV=untied   # the model card's vLLM example loads this branch (untied embedding weights)
 DOCLING_HOME=${DOCLING_HOME:-$HOME/.docling-rtx}
@@ -70,7 +71,7 @@ need_whiptail() {   # minimal images (Docker, rented pods) don't ship it, and th
 wt() { whiptail --backtitle "Docling RTX setup $VERSION" "$@" 3>&1 1>&2 2>&3 </dev/tty; }
 
 load_conf() {   # environment beats config.env beats defaults
-  local p=${PORT:-} g=${GPU_UTIL:-} b=${BATCH:-} c=${CUDA:-} i=${INBOX:-} o=${OUTBOX:-} e=${WATCH_ENGINE:-} f=${WATCH_FORMATS:-} wh=${WEB_HOST:-} wp=${WEB_PORT:-} wpp=${WEB_PUBLIC_PORT:-}
+  local p=${PORT:-} g=${GPU_UTIL:-} b=${BATCH:-} c=${CUDA:-} i=${INBOX:-} o=${OUTBOX:-} e=${WATCH_ENGINE:-} f=${WATCH_FORMATS:-} wh=${WEB_HOST:-} wp=${WEB_PORT:-} wpp=${WEB_PUBLIC_PORT:-} wt=${WEB_TUNNEL:-}
   [ "${WEB_PUBLIC:-}" = 1 ] && wh=0.0.0.0   # WEB_PUBLIC=1: direct link with a key (e.g. at install)
   if [ -f "$CONF" ]; then
     . "$CONF"
@@ -83,11 +84,12 @@ load_conf() {   # environment beats config.env beats defaults
   INBOX=${i:-${INBOX:-$HOME/docling/inbox}} OUTBOX=${o:-${OUTBOX:-$HOME/docling/outbox}}
   WATCH_ENGINE=${e:-${WATCH_ENGINE:-standard}} WATCH_FORMATS=${f:-${WATCH_FORMATS:-json}}
   WEB_HOST=${wh:-${WEB_HOST:-127.0.0.1}} WEB_PORT=${wp:-${WEB_PORT:-8080}} WEB_PUBLIC_PORT=${wpp:-${WEB_PUBLIC_PORT:-}}
+  WEB_TUNNEL=${wt:-${WEB_TUNNEL:-1}}   # 1 = public https link through a Cloudflare quick tunnel (key required)
 }
 save_conf() {
   mkdir -p "$DOCLING_HOME"
-  printf 'CONF_VERSION=2\nPORT=%s\nGPU_UTIL=%s\nBATCH=%s\nCUDA=%s\nINBOX="%s"\nOUTBOX="%s"\nWATCH_ENGINE=%s\nWATCH_FORMATS="%s"\nWEB_HOST=%s\nWEB_PORT=%s\nWEB_PUBLIC_PORT=%s\n' \
-    "$PORT" "$GPU_UTIL" "$BATCH" "$CUDA" "$INBOX" "$OUTBOX" "$WATCH_ENGINE" "$WATCH_FORMATS" "$WEB_HOST" "$WEB_PORT" "$WEB_PUBLIC_PORT" > "$CONF"
+  printf 'CONF_VERSION=2\nPORT=%s\nGPU_UTIL=%s\nBATCH=%s\nCUDA=%s\nINBOX="%s"\nOUTBOX="%s"\nWATCH_ENGINE=%s\nWATCH_FORMATS="%s"\nWEB_HOST=%s\nWEB_PORT=%s\nWEB_PUBLIC_PORT=%s\nWEB_TUNNEL=%s\n' \
+    "$PORT" "$GPU_UTIL" "$BATCH" "$CUDA" "$INBOX" "$OUTBOX" "$WATCH_ENGINE" "$WATCH_FORMATS" "$WEB_HOST" "$WEB_PORT" "$WEB_PUBLIC_PORT" "$WEB_TUNNEL" > "$CONF"
 }
 
 # --- detection -------------------------------------------------------------------------------------------
@@ -422,10 +424,12 @@ watch_apply() {   # settings changed: rewrite the unit and restart, if the watch
 # Web page: drag & drop upload, live progress, downloads (web.py)
 web_cmd() {
   echo "$DOCLING_HOME/venv/bin/python $DOCLING_HOME/web.py --inbox $INBOX --outbox $OUTBOX" \
-       "--status-file $DOCLING_HOME/watch-status.json --host $WEB_HOST --port $WEB_PORT --vllm-port $PORT --config $CONF --batch $(auto_batch)"
+       "--status-file $DOCLING_HOME/watch-status.json --host $WEB_HOST --port $WEB_PORT --vllm-port $PORT --config $CONF --batch $(auto_batch)" \
+       "--tunnel-log $DOCLING_HOME/tunnel-cf.log"
 }
-web_token() {     # only when the page listens beyond localhost (docling-rtx web public)
-  [ "$WEB_HOST" = 127.0.0.1 ] && return 0
+needs_token() { [ "$WEB_HOST" != 127.0.0.1 ] || [ "$WEB_TUNNEL" = 1 ]; }   # anyone but this machine can reach it
+web_token() {     # the key in the link: only when the page is reachable from outside (tunnel or public)
+  needs_token || return 0
   [ -s "$DOCLING_HOME/web.token" ] || ( umask 077; head -c 18 /dev/urandom | base64 | tr '+/' '-_' > "$DOCLING_HOME/web.token" )
   cat "$DOCLING_HOME/web.token"
 }
@@ -433,10 +437,47 @@ web_start() { DOCLING_WEB_TOKEN=$(web_token) svc_start web "$(web_cmd)"; }
 step_web() {
   say "Web page on $WEB_HOST:$WEB_PORT (drag & drop, progress, downloads)"
   local env=""
-  [ "$WEB_HOST" = 127.0.0.1 ] || { [ "$DRY" = 1 ] || env="Environment=DOCLING_WEB_TOKEN=$(web_token)"; }
+  if needs_token && [ "$DRY" = 0 ]; then env="Environment=DOCLING_WEB_TOKEN=$(web_token)"; fi
   if has_systemd; then write_unit docling-web "Docling RTX web page" "$(web_cmd)" "" "$env"; fi
   [ "$DRY" = 1 ] || web_start || true
+  if [ "$WEB_TUNNEL" = 1 ]; then step_tunnel; fi
   return 0
+}
+
+# Cloudflare quick tunnel: a public https://<random>.trycloudflare.com address for the page, no account and no open
+# port needed (works on pods that expose nothing). The address changes when the tunnel restarts; the page and
+# 'docling-rtx howto' show the current one. Uploads through it are limited to 100 MB per file (Cloudflare's limit).
+CF=$DOCLING_HOME/bin/cloudflared
+cloudflared_bin() { if [ -x "$CF" ]; then echo "$CF"; elif have cloudflared; then command -v cloudflared; fi; }
+step_cloudflared() {
+  [ -n "$(cloudflared_bin)" ] && return 0
+  local arch; case $(uname -m) in x86_64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) arch=$(uname -m) ;; esac
+  say "Installing cloudflared (Cloudflare's tunnel client) into $DOCLING_HOME/bin"
+  run mkdir -p "$DOCLING_HOME/bin"
+  run curl -fsSL -o "$CF.part" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$arch" &&
+    run chmod +x "$CF.part" && run mv "$CF.part" "$CF" || { warn "Couldn't download cloudflared: no public link."; return 1; }
+}
+tunnel_cmd() {
+  echo "$(cloudflared_bin) tunnel --no-autoupdate --logfile $DOCLING_HOME/tunnel-cf.log --url http://127.0.0.1:$WEB_PORT"
+}
+tunnel_url() {    # the current https://....trycloudflare.com address (the last one cloudflared announced)
+  grep -aoE 'https://[a-z0-9-]+\.trycloudflare\.com' "$DOCLING_HOME/tunnel-cf.log" 2>/dev/null | tail -1
+}
+tunnel_start() {
+  [ -n "$(cloudflared_bin)" ] || step_cloudflared || return 1
+  rm -f "$DOCLING_HOME/tunnel-cf.log"
+  svc_start tunnel "$(tunnel_cmd)" || return 1
+  local _
+  for _ in $(seq 1 40); do [ -n "$(tunnel_url)" ] && break; sleep 0.5; done
+  if [ -n "$(tunnel_url)" ]; then ok "Public link: $(tunnel_url)/?token=$(web_token)"
+  else warn "The tunnel started but has no address yet: $ME web url (in a few seconds), log: $ME web tunnel logs"; fi
+}
+step_tunnel() {
+  say "Public link through a Cloudflare tunnel (anyone with the link and its key can use the page)"
+  [ "$DRY" = 1 ] && { echo "   [dry-run] cloudflared tunnel --url http://127.0.0.1:$WEB_PORT"; return 0; }
+  step_cloudflared || return 0
+  if has_systemd; then write_unit docling-tunnel "Cloudflare quick tunnel to the Docling RTX web page" "$(tunnel_cmd)" "" ""; fi
+  tunnel_start || true
 }
 valid_port() { [[ ${1:-} =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
 public_port() {   # the port the outside world uses: pod providers often map the pod's port to another one
@@ -448,15 +489,17 @@ public_ip() {
 }
 web_url() {
   local runpod="RUNPOD_TCP_PORT_$WEB_PORT"
-  if [ "$WEB_HOST" = 127.0.0.1 ]; then echo "http://localhost:$WEB_PORT"
+  if [ "$WEB_TUNNEL" = 1 ] && [ -n "$(tunnel_url)" ] && svc_running tunnel; then echo "$(tunnel_url)/?token=$(web_token)"
+  elif [ "$WEB_HOST" = 127.0.0.1 ]; then   # key needed here too when the tunnel is on (same page)
+    if needs_token; then echo "http://localhost:$WEB_PORT/?token=$(web_token)"; else echo "http://localhost:$WEB_PORT"; fi
   elif [ -n "${RUNPOD_POD_ID:-}" ] && [ -z "$WEB_PUBLIC_PORT" ] && [ -z "${!runpod:-}" ]; then
     # RunPod's HTTPS proxy (add the port under "Expose HTTP ports" in the pod settings)
     echo "https://$RUNPOD_POD_ID-$WEB_PORT.proxy.runpod.net/?token=$(web_token)"
   else echo "http://$(public_ip):$(public_port)/?token=$(web_token)"; fi
 }
-web_apply() {     # port or access changed: rewrite the service and restart it (if Docling is installed)
+web_apply() {     # port or access changed: rewrite the services and restart them (if Docling is installed)
   save_conf
-  if [ -x "$DOCLING_HOME/venv/bin/python" ]; then svc_remove web; step_web; fi
+  if [ -x "$DOCLING_HOME/venv/bin/python" ]; then svc_remove tunnel; svc_remove web; step_web; fi
   howto
 }
 autostart() {     # no systemd: bring back what was running, at login (hooked into ~/.bashrc by step_autostart)
@@ -466,6 +509,7 @@ autostart() {     # no systemd: bring back what was running, at login (hooked in
   if [ -x "$DOCLING_HOME/vllm/bin/vllm" ] && [ ! -f "$DOCLING_HOME/vllm.off" ] && ! healthy; then server_start >/dev/null 2>&1 || true; fi
   [ -f "$DOCLING_HOME/watch.off" ] || svc_running watch || watch_start >/dev/null 2>&1 || true
   [ -f "$DOCLING_HOME/web.off" ] || svc_running web || web_start >/dev/null 2>&1 || true
+  if [ "$WEB_TUNNEL" = 1 ] && [ ! -f "$DOCLING_HOME/tunnel.off" ] && ! svc_running tunnel; then tunnel_start >/dev/null 2>&1 || true; fi
   return 0
 }
 step_autostart() {
@@ -478,12 +522,17 @@ step_autostart() {
 
 howto() {
   local tunnel=""
-  [ "$WEB_HOST" != 127.0.0.1 ] && [ "$(public_port)" != "$WEB_PORT" ] && tunnel="
+  if [ "$WEB_TUNNEL" = 1 ] && [ -n "$(tunnel_url)" ] && svc_running tunnel; then
+    tunnel="
+  │    Public link through Cloudflare: anyone with it (key included) can use the page. It changes when the
+  │    tunnel restarts; 'docling-rtx web url' shows the current one. Uploads over 100 MB: copy into the inbox."
+  fi
+  [ -z "$tunnel" ] && [ "$WEB_HOST" != 127.0.0.1 ] && [ "$(public_port)" != "$WEB_PORT" ] && tunnel="
   │    (the page listens on port $WEB_PORT in this machine; your provider maps it to $(public_port) outside)"
-  [ "$WEB_HOST" != 127.0.0.1 ] && [ "$(public_port)" = "$WEB_PORT" ] && tunnel="
+  [ -z "$tunnel" ] && [ "$WEB_HOST" != 127.0.0.1 ] && [ "$(public_port)" = "$WEB_PORT" ] && tunnel="
   │    Listening on port $WEB_PORT. If your provider maps it to another public port, set it:
   │      docling-rtx web port $WEB_PORT <public port>"
-  [ "$WEB_HOST" = 127.0.0.1 ] && tunnel="
+  [ -z "$tunnel" ] && [ "$WEB_HOST" = 127.0.0.1 ] && tunnel="
   │    It listens on this server only. From your laptop, add  -L $WEB_PORT:127.0.0.1:$WEB_PORT  to the ssh
   │    command you use for this server, e.g.  ssh -L $WEB_PORT:127.0.0.1:$WEB_PORT root@<server> -p <port>
   │    and keep that ssh session open while you use the page."
@@ -562,6 +611,10 @@ status() {
   if watch_running; then echo "Watcher:  UP   $INBOX -> $OUTBOX ($WATCH_FORMATS, engine $WATCH_ENGINE)"
   else echo "Watcher:  down ($INBOX -> $OUTBOX)"; fi
   if svc_running web; then echo "Web page: UP   $(web_url)"; else echo "Web page: down (docling-rtx web start)"; fi
+  if [ "$WEB_TUNNEL" = 1 ]; then
+    if svc_running tunnel && [ -n "$(tunnel_url)" ]; then echo "Tunnel:   UP   $(tunnel_url)  (Cloudflare quick tunnel)"
+    else echo "Tunnel:   down (docling-rtx web tunnel on)"; fi
+  fi
   echo "Settings: PORT=$PORT GPU_UTIL=$(gpu_util) BATCH=$(auto_batch) CUDA=$(cuda_flavor)"
   have nvidia-smi && nvidia-smi --query-gpu=memory.used,memory.total,utilization.gpu --format=csv,noheader | sed 's/^/GPU now:  /'
   return 0
@@ -583,7 +636,7 @@ test_run() {
 }
 
 uninstall() {
-  server_stop || true; svc_remove watch; svc_remove web
+  server_stop || true; svc_remove watch; svc_remove tunnel; svc_remove web
   rm -f "$HOME/.local/bin/docling-rtx"
   local c
   for c in docling-rtx docling-convert docling; do   # only our links
@@ -624,12 +677,17 @@ install_steps() {   # $@ = steps
 # --- whiptail menu ---------------------------------------------------------------------------------------
 menu_settings() {
   local v
-  local old_web="$WEB_HOST:$WEB_PORT:$WEB_PUBLIC_PORT" old_vllm="$PORT:$GPU_UTIL"
+  local old_web="$WEB_HOST:$WEB_PORT:$WEB_PUBLIC_PORT:$WEB_TUNNEL" old_vllm="$PORT:$GPU_UTIL"
   v=$(wt --title "Web page port" --inputbox "Port the web page listens on (your GPU provider may give you one):" 9 70 "$WEB_PORT") && valid_port "$v" && WEB_PORT=$v
-  v=$(wt --title "Web page access" --radiolist "How you reach the web page:" 12 78 2 \
-      private "SSH tunnel only (ssh -L ...), safest" "$([ "$WEB_HOST" = 127.0.0.1 ] && echo ON || echo OFF)" \
-      public "direct link http://IP:PORT with a key (provider-exposed port)" "$([ "$WEB_HOST" != 127.0.0.1 ] && echo ON || echo OFF)") &&
-    { [ "$v" = public ] && WEB_HOST=0.0.0.0 || WEB_HOST=127.0.0.1; }
+  v=$(wt --title "Web page access" --radiolist "How you reach the web page:" 13 78 3 \
+      tunnel "public https link via Cloudflare, with a key (no open port needed)" "$([ "$WEB_TUNNEL" = 1 ] && echo ON || echo OFF)" \
+      private "SSH tunnel only (ssh -L ...), safest" "$([ "$WEB_TUNNEL" != 1 ] && [ "$WEB_HOST" = 127.0.0.1 ] && echo ON || echo OFF)" \
+      public "direct link http://IP:PORT with a key (provider-exposed port)" "$([ "$WEB_TUNNEL" != 1 ] && [ "$WEB_HOST" != 127.0.0.1 ] && echo ON || echo OFF)") &&
+    case $v in
+      tunnel) WEB_TUNNEL=1 WEB_HOST=127.0.0.1 ;;
+      private) WEB_TUNNEL=0 WEB_HOST=127.0.0.1 ;;
+      public) WEB_TUNNEL=0 WEB_HOST=0.0.0.0 ;;
+    esac
   if [ "$WEB_HOST" != 127.0.0.1 ]; then
     v=$(wt --title "Public port" --inputbox "If your provider maps port $WEB_PORT to a different public port, enter it.\nLeave empty if it's the same (detected now: $(public_port)):" 10 76 "$WEB_PUBLIC_PORT") &&
       { [ -z "$v" ] || valid_port "$v"; } && WEB_PUBLIC_PORT=$v
@@ -649,7 +707,7 @@ menu_settings() {
     wt --yesno "vLLM settings changed. Restart vLLM now to apply them?" 8 60 && { server_start_restart; pause; }
   fi
   watch_apply || true
-  if [ "$old_web" != "$WEB_HOST:$WEB_PORT:$WEB_PUBLIC_PORT" ]; then web_apply; pause; fi
+  if [ "$old_web" != "$WEB_HOST:$WEB_PORT:$WEB_PUBLIC_PORT:$WEB_TUNNEL" ]; then web_apply; pause; fi
 }
 server_start_restart() { server_stop; server_start; }
 
@@ -777,8 +835,15 @@ case ${args[0]:-} in
     esac ;;
   web)
     case ${args[1]:-url} in
-      start|restart) web_start && howto ;;
-      stop) svc_stop web; ok "Web page stopped" ;;
+      start|restart) web_start && { [ "$WEB_TUNNEL" != 1 ] || tunnel_start; } && howto ;;
+      stop) svc_stop tunnel; svc_stop web; ok "Web page stopped" ;;
+      tunnel)   # web tunnel on|off|logs: the public Cloudflare link
+        case ${args[2]:-on} in
+          on) WEB_TUNNEL=1; web_apply ;;
+          off) WEB_TUNNEL=0; web_apply ;;
+          logs) cat "$DOCLING_HOME/tunnel-cf.log" 2>/dev/null | tail -40 ;;
+          *) die "Use: $ME web tunnel on|off|logs" ;;
+        esac ;;
       logs) svc_logs web ;;
       url) howto ;;
       public|private)   # public: all interfaces + a key in the link (pods that expose ports); private: SSH tunnel
@@ -789,7 +854,7 @@ case ${args[0]:-} in
         [ -z "${args[3]:-}" ] || valid_port "${args[3]}" || die "Not a port: ${args[3]}"
         WEB_PORT=${args[2]} WEB_PUBLIC_PORT=${args[3]:-}
         web_apply ;;
-      *) die "Use: $ME web [url|start|stop|logs|public|private|port <port> [public port]]" ;;
+      *) die "Use: $ME web [url|start|stop|logs|public|private|tunnel on|off|port <port> [public port]]" ;;
     esac ;;
   howto|help) howto ;;
   autostart) autostart ;;

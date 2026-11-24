@@ -2,7 +2,7 @@
 
 **One command turns a rented or local Linux box with an NVIDIA GPU into a document-processing machine.** Drag PDFs, CSVs, Office files, HTML or images onto a web page (or drop them in a folder), and structured JSON for your AI agent comes out.
 
-It installs [Docling](https://github.com/docling-project/docling) on CUDA PyTorch and serves IBM's [granite-docling-258M](https://huggingface.co/ibm-granite/granite-docling-258M) vision-language model with vLLM, the fast path from Docling's [RTX guide](https://docling-project.github.io/docling/getting_started/rtx/#5-install-and-run-docling). Forked from [Summon](https://github.com/codyvolckmar/summon).
+It installs [Docling](https://github.com/docling-project/docling) on CUDA PyTorch and serves IBM's [granite-docling-258M](https://huggingface.co/ibm-granite/granite-docling-258M) vision-language model with vLLM, the fast path from Docling's [RTX guide](https://docling-project.github.io/docling/getting_started/rtx/#5-install-and-run-docling). Forked from [Summon](https://github.com/codyvolckmar/summon). What changed in each version: [CHANGELOG.md](CHANGELOG.md).
 
 ![Web page: converting a 40-page PDF](docs/img/06-web-converting.png)
 
@@ -14,9 +14,13 @@ It installs [Docling](https://github.com/docling-project/docling) on CUDA PyTorc
 curl -fsSL https://raw.githubusercontent.com/codyvolckmar/docling-rtx/main/install.sh | bash
 ```
 
-It runs for a few minutes and ends with a **How to use** box that has your web address.
+**It takes about 12 minutes on a fresh pod**, mostly downloading CUDA PyTorch (~3 GB) and Docling's models. It ends with a **How to use** box that has your public web link. Rerunning it to update reuses everything already downloaded.
 
-**2. Open the web page.** It listens on the server only. From your laptop, add `-L 8080:127.0.0.1:8080` to the ssh command you already use for the server, then open **http://localhost:8080**:
+**2. Open the link it prints**, like `https://<random-words>.trycloudflare.com/?token=...`. A free [Cloudflare quick tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/) makes the page reachable from anywhere over HTTPS, with no account and no open port on the pod. **Anyone with the link and its key can use the page**, so share it like a password. The page shows the current link with a **copy** button. The address changes whenever the tunnel restarts, and `docling-rtx web url` prints it again.
+
+Limits of quick tunnels: uploads through the link are capped at **100 MB per file** (copy bigger files into the inbox instead), and Cloudflare gives no uptime guarantee. To switch it off: `docling-rtx web tunnel off`.
+
+**Prefer no public link?** Use an SSH tunnel: `docling-rtx web tunnel off`, then from your laptop add `-L 8080:127.0.0.1:8080` to your ssh command and open **http://localhost:8080**:
 
 ```bash
 ssh -L 8080:127.0.0.1:8080 root@<server> -p <port>      # keep this open while you use the page
@@ -58,6 +62,7 @@ Or use the menu: `docling-rtx`, Settings. Public mode prints `http://<server-ip>
 | Server | `vllm serve` with the RTX guide's settings (`--max-num-seqs 512 --max-num-batched-tokens 8192 --enable-chunked-prefill`), sized to the card: 0.85 of the GPU when the drop folder uses the vlm engine, 0.5 when it shares the card with the standard pipeline; under 10 GB, 32 parallel pages and 0.7 of the GPU; float16 on pre-RTX 30 cards, on `127.0.0.1:8000` only. Runs as the systemd unit `docling-vllm`, which starts on boot; without systemd it runs as a background process. |
 | Drop folder | The `docling-watch` service watches `~/docling/inbox` and writes `<name>.json` (a DoclingDocument) to `~/docling/outbox`, atomically, or `<name>.error.json` on failure. Changed files are converted again. The handover rules are in [GUIDE.md](GUIDE.md#0-the-web-page-and-the-drop-folder-the-main-workflow). |
 | Web page | `docling-web` (or a background process): drag & drop upload into the inbox, live progress from the watcher, downloads, retry. Python standard library only, on `127.0.0.1:8080` (`docling-rtx web public` for a direct link with a key). |
+| Public link | `docling-tunnel`: `cloudflared` (downloaded into `~/.docling-rtx/bin`) runs a Cloudflare quick tunnel to the page. The page then always asks for its key, even from localhost. |
 | Test | `./docling-setup.sh test` converts the Docling paper with both engines into `~/.docling-rtx/test-output/`. |
 
 You don't need the CUDA Toolkit or cuDNN, steps 2-3 of the RTX guide: the PyTorch and vLLM wheels bundle the CUDA runtime and cuDNN. Only the driver matters.
@@ -74,6 +79,7 @@ docling-rtx install                   # full install, no questions (--auto / -y)
 docling-rtx howto                     # the web address and how to use it
 docling-rtx status                    # GPU, CUDA, vLLM / converter / web page up or down
 docling-rtx web [url|start|stop|logs|public|private]   # the web page
+docling-rtx web tunnel on|off|logs                     # the public Cloudflare link (on by default)
 docling-rtx web port <port> [public port]              # its port (and the provider's public port)
 docling-rtx watch start|stop|restart|logs              # the drop folder (logs = progress)
 docling-rtx start|stop|restart|logs   # the vLLM server
@@ -96,6 +102,7 @@ Settings live in `~/.docling-rtx/config.env` (menus 3 and 9): `PORT=8000`, `GPU_
 | [docling-setup.sh](docling-setup.sh) | Installer, menu and the `docling-rtx` command |
 | [web.py](web.py) | The web page (standard library only) |
 | [convert.py](convert.py) | Converter: files/folders/URLs, three engines (`standard`, `vlm`, `local`), `--watch` drop-folder mode, atomic writes, skips finished documents |
+| [CHANGELOG.md](CHANGELOG.md) | What changed in each version |
 | [GUIDE.md](GUIDE.md) | How to process documents once it's live |
 | [tools/termshot.py](tools/termshot.py) | Regenerates the screenshots (real whiptail in a pseudo-terminal) |
 
