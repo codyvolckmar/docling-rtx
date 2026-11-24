@@ -18,7 +18,7 @@
 # What it installs (nothing outside these, apart from apt packages and the optional systemd unit):
 #   ~/.local/bin/uv                    Python/package manager (brings its own Python 3.12)
 #   $DOCLING_HOME/venv                 docling + CUDA PyTorch (cu126/cu128/cu130, picked from your driver)
-#   $DOCLING_HOME/vllm                 vLLM in its own venv (it pins its own torch version)
+#   $DOCLING_HOME/vllm                 vLLM in its own venv, only once the vlm engine is used (docling-rtx start)
 #   $DOCLING_HOME/convert.py           batch converter; launcher: ~/.local/bin/docling-convert
 #   ~/.cache/huggingface               model weights (granite-docling-258M, Docling's layout/table models)
 #   docling-vllm.service               systemd unit (or a background process where systemd isn't running)
@@ -33,7 +33,7 @@
 #   DOCLING_GPU="RTX 4090:24564:575.64"   pretend this GPU (name:MB:driver), for --dry-run previews
 set -euo pipefail
 
-VERSION=1.2.0
+VERSION=1.3.0
 MODEL=ibm-granite/granite-docling-258M
 MODEL_REV=untied   # the model card's vLLM example loads this branch (untied embedding weights)
 DOCLING_HOME=${DOCLING_HOME:-$HOME/.docling-rtx}
@@ -45,6 +45,8 @@ SRC_DIR=$(cd "$(dirname "$SELF")" 2>/dev/null && pwd || pwd)
 REPO_RAW=${REPO_RAW:-https://raw.githubusercontent.com/codyvolckmar/docling-rtx/main}   # where to fetch convert.py when this script runs without the repo next to it
 TEST_URL=https://arxiv.org/pdf/2501.17887   # the Docling paper, as in the model card's examples
 export PATH="$HOME/.local/bin:$PATH" HF_HUB_DISABLE_TELEMETRY=1 DO_NOT_TRACK=1
+# vLLM, the converter and the web page talk over 127.0.0.1: never through a pod's http_proxy
+export NO_PROXY="127.0.0.1,localhost${NO_PROXY:+,$NO_PROXY}" no_proxy="127.0.0.1,localhost${no_proxy:+,$no_proxy}"
 DRY=0
 ME=$0; [ "$(basename "$0")" = docling-rtx ] && ME=docling-rtx   # how to name this command in messages
 
@@ -101,13 +103,14 @@ detect_gpu() {
     GPU_CC=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ' || true)
   fi
 }
-cuda_flavor() {   # PyTorch wheel matching the driver (cu130 needs driver >= 580, cu128 >= 570, cu126 >= 560)
+cuda_flavor() {   # PyTorch wheel for the driver: cu130 >= 580, cu128 >= 570, cu126 >= 525 (CUDA 12 minor-version
+                  # compatibility: rented pods often run 535/550, and a pod user can't upgrade the host driver)
   [ "$CUDA" != auto ] && { echo "$CUDA"; return; }
   [ -z "$DRIVER" ] && { echo cpu; return; }
   local major=${DRIVER%%.*}
   if   [ "$major" -ge 580 ]; then echo cu130
   elif [ "$major" -ge 570 ]; then echo cu128
-  elif [ "$major" -ge 560 ]; then echo cu126
+  elif [ "$major" -ge 525 ]; then echo cu126
   else echo old; fi
 }
 auto_batch() {    # Docling's RTX guide: 32 GB -> 64-128, 24 GB -> 32-64, 12 GB -> 16-32
@@ -117,10 +120,14 @@ auto_batch() {    # Docling's RTX guide: 32 GB -> 64-128, 24 GB -> 32-64, 12 GB 
   elif [ "${GPU_MB:-0}" -ge 10000 ]; then echo 16
   else echo 8; fi
 }
-gpu_util() {      # share of VRAM vLLM takes; on small cards it needs a bigger share for its startup profiling run
+gpu_util() {      # share of VRAM vLLM takes
   [ "$GPU_UTIL" != auto ] && { echo "$GPU_UTIL"; return; }
-  if [ "${GPU_MB:-0}" -ge 10000 ]; then echo 0.5; else echo 0.7; fi
+  # vlm drop folder: vLLM does the work, the standard models aren't loaded -> most of the card. Otherwise it shares
+  # the card with the standard pipeline: half (small cards need 0.7 for vLLM's startup profiling run).
+  if [ "$WATCH_ENGINE" = vlm ]; then echo 0.85
+  elif [ "${GPU_MB:-0}" -ge 10000 ]; then echo 0.5; else echo 0.7; fi
 }
+uses_vlm() { [ "$WATCH_ENGINE" = vlm ] || [ "${WITH_VLM:-}" = 1 ]; }
 has_systemd() { [ -z "${DOCLING_NO_SYSTEMD:-}" ] && [ -d /run/systemd/system ] && have systemctl; }
 
 # --- install steps ---------------------------------------------------------------------------------------
@@ -132,13 +139,14 @@ step_preflight() {
   detect_gpu
   if [ -n "$GPU_NAME" ]; then
     ok "GPU: $GPU_NAME, $(((GPU_MB + 512) / 1024)) GB, driver $DRIVER"
-    [ "$(cuda_flavor)" = old ] && die "Driver $DRIVER is too old: install driver 570 or newer (menu: NVIDIA driver)."
+    [ "$(cuda_flavor)" = old ] && die "Driver $DRIVER is too old for CUDA PyTorch (needs 525+). Update the driver, or install CPU-only: CUDA=cpu $ME install"
   else
     warn "No working NVIDIA driver (nvidia-smi failed). Install the driver first (menu: NVIDIA driver), or"
     warn "continue CPU-only: Docling works, vLLM is skipped."
   fi
   local free_gb; free_gb=$({ df -Pk "$HOME" 2>/dev/null || df -Pk /; } | awk 'NR==2{print int($4/1048576)}')
-  [ "$free_gb" -ge 20 ] || warn "Only ${free_gb} GB free in $HOME; the full install needs ~20 GB."
+  local need=8; uses_vlm && need=20   # Docling + CUDA PyTorch + models ~8 GB; vLLM adds ~12 GB
+  [ "$free_gb" -ge "$need" ] || warn "Only ${free_gb} GB free in $HOME; this install needs ~${need} GB."
 }
 
 step_driver() {
@@ -157,7 +165,12 @@ step_driver() {
 }
 
 step_apt() {
-  say "System packages"
+  local p missing=""
+  for p in ca-certificates curl git whiptail build-essential libgl1 libglib2.0-0 screen; do
+    dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"
+  done
+  if [ -z "$missing" ]; then ok "System packages present"; return 0; fi
+  say "System packages:$missing"
   run $SUDO apt-get update -q
   # libgl1/libglib2.0-0: OpenCV (used by Docling's OCR); build-essential: Triton compiles small kernels at runtime.
   run $SUDO apt-get install -y -q --no-install-recommends ca-certificates curl git whiptail \
@@ -236,11 +249,8 @@ step_vllm() {
 }
 
 step_models() {
-  say "Downloading models (granite-docling-258M for vLLM and inline use)"
-  local py=$DOCLING_HOME/venv/bin
-  run "$py/hf" download "$MODEL" --revision "$MODEL_REV" --quiet
-  run "$py/hf" download "$MODEL" --quiet
-  ok "Docling's layout/table/OCR models download on first use (the test step triggers it)."
+  say "Downloading granite-docling-258M for vLLM"
+  run "$DOCLING_HOME/venv/bin/hf" download "$MODEL" --revision "$MODEL_REV" --quiet >/dev/null
 }
 
 vllm_cmd() {
@@ -270,6 +280,8 @@ Environment=HF_HOME=${HF_HOME:-$HOME/.cache/huggingface}
 Environment=HF_HUB_DISABLE_TELEMETRY=1
 Environment=VLLM_NO_USAGE_STATS=1
 Environment=PYTHONUNBUFFERED=1
+Environment=NO_PROXY=127.0.0.1,localhost
+Environment=no_proxy=127.0.0.1,localhost
 ${5:+$5
 }ExecStart=$3
 Restart=always
@@ -293,30 +305,72 @@ step_service() {
   fi
 }
 
+step_warmup() {   # convert a one-line PDF: Docling downloads and loads its models now, not on your first document
+  [ "$DRY" = 1 ] && { echo "   [dry-run] warm-up conversion (downloads Docling's layout/table/OCR models)"; return 0; }
+  say "Warming up: downloading Docling's layout, table and OCR models (first install only, ~1 min)"
+  local d; d=$(mktemp -d)
+  "$DOCLING_HOME/venv/bin/python" - "$d/warmup.pdf" <<'EOF'
+import sys
+objs = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        None, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+text = b"BT /F1 24 Tf 72 120 Td (Docling RTX warm-up) Tj ET"
+objs[3] = b"<< /Length %d >>\nstream\n" % len(text) + text + b"\nendstream"
+out, offs = bytearray(b"%PDF-1.4\n"), []
+for i, o in enumerate(objs, 1):
+    offs.append(len(out)); out += b"%d 0 obj\n" % i + o + b"\nendobj\n"
+x = len(out)
+out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1) + b"".join(b"%010d 00000 n \n" % o for o in offs)
+out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, x)
+open(sys.argv[1], "wb").write(out)
+EOF
+  if "$DOCLING_HOME/venv/bin/python" "$DOCLING_HOME/convert.py" "$d/warmup.pdf" -o "$d/out" --to md >"$d/log" 2>&1 &&
+     grep -q "warm-up" "$d/out/warmup.md" 2>/dev/null; then ok "Models ready: the first document starts right away"
+  else warn "Warm-up conversion failed (the first document will download the models). Log:"; tail -5 "$d/log"; fi
+  rm -rf "$d"
+}
+
 # --- background services: the drop-folder watcher and the web page ----------------------------------------
 # systemd units where systemd runs; otherwise background processes with a pid file, restarted at login
 # (rented GPU pods are usually containers without systemd).
 svc_unit_file() { echo "/etc/systemd/system/docling-$1.service"; }
 svc_unit() { has_systemd && [ -f "$(svc_unit_file "$1")" ]; }
-svc_running() {   # $1 = watch | web
+svc_running() {   # $1 = watch | web: the program itself runs (not just its restart loop)
   if svc_unit "$1"; then systemctl is-active -q "docling-$1"
-  else [ -f "$DOCLING_HOME/$1.pid" ] && kill -0 "$(cat "$DOCLING_HOME/$1.pid")" 2>/dev/null; fi
+  else [ -f "$DOCLING_HOME/$1.pid" ] && kill -0 "$(cat "$DOCLING_HOME/$1.pid")" 2>/dev/null &&
+       [ -f "$DOCLING_HOME/$1.child" ] && kill -0 "$(cat "$DOCLING_HOME/$1.child")" 2>/dev/null; fi
+}
+web_answers() {   # our web page (not another program, e.g. Jupyter on 8080) answers on its port
+  curl -s -m 3 -o /dev/null -D - "http://127.0.0.1:$WEB_PORT/logo.png" 2>/dev/null | grep -qi "^server: docling-rtx"
 }
 svc_start() {     # $1 name, $2 command
   [ -x "$DOCLING_HOME/venv/bin/python" ] || { warn "Docling isn't installed (menu: Install)."; return 1; }
-  if svc_unit "$1"; then $SUDO systemctl restart "docling-$1"
+  rm -f "$DOCLING_HOME/$1.off" "$DOCLING_HOME/$1.crashes"
+  if svc_unit "$1"; then $SUDO systemctl reset-failed "docling-$1" 2>/dev/null; $SUDO systemctl restart "docling-$1"
   else
-    svc_running "$1" && svc_stop "$1"
+    svc_stop "$1"; rm -f "$DOCLING_HOME/$1.off"
     # A restart loop, like systemd's Restart=always: brings it back after a crash or a forced cancel (exit 75).
-    # setsid makes the loop a process group, so stopping kills the loop and the program together.
-    setsid nohup bash -c 'while :; do "$@"; [ $? = 0 ] && break; sleep 3; done' docling-$1 $2 \
-      >> "$DOCLING_HOME/$1.log" 2>&1 < /dev/null &
+    # It records the program's pid (for status) and each crash (so a program that can't start isn't shown as UP).
+    # setsid makes it a process group: stopping kills the loop and the program together.
+    setsid nohup bash -c 'n=$1 d=$2; shift 2; while :; do "$@" & echo $! > "$d/$n.child"; wait $!; rc=$?
+      [ $rc = 0 ] && break; echo "$(date +%T) exit $rc" >> "$d/$n.crashes"; sleep 3; done' \
+      "docling-$1" "$1" "$DOCLING_HOME" $2 >> "$DOCLING_HOME/$1.log" 2>&1 < /dev/null &
     echo $! > "$DOCLING_HOME/$1.pid"
   fi
-  sleep 2
-  svc_running "$1" || { warn "docling-$1 stopped right away. Log:"; svc_logs "$1" | tail -15; return 1; }
+  sleep 4
+  local bad=""
+  if svc_unit "$1"; then
+    [ "$(systemctl show -p NRestarts --value "docling-$1" 2>/dev/null || echo 0)" -gt 0 ] && bad=1
+  else [ -s "$DOCLING_HOME/$1.crashes" ] && bad=1; fi
+  [ "$1" = web ] && ! web_answers && bad=1
+  if [ -n "$bad" ] || ! svc_running "$1"; then
+    warn "docling-$1 isn't running properly. Its log:"; svc_logs "$1" | tail -12
+    [ "$1" = web ] && warn "Is port $WEB_PORT taken by another program? Choose another: $ME web port <port>"
+    return 1
+  fi
 }
 svc_stop() {
+  [ -d "$DOCLING_HOME" ] && touch "$DOCLING_HOME/$1.off"   # autostart leaves it off until it's started again
   if svc_unit "$1"; then $SUDO systemctl stop "docling-$1"
   elif [ -f "$DOCLING_HOME/$1.pid" ]; then
     local pid; pid=$(cat "$DOCLING_HOME/$1.pid")
@@ -386,14 +440,18 @@ step_web() {
 }
 valid_port() { [[ ${1:-} =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
 public_port() {   # the port the outside world uses: pod providers often map the pod's port to another one
-  local vast="VAST_TCP_PORT_$WEB_PORT"   # Vast.ai advertises its mapping in VAST_TCP_PORT_<internal port>
-  echo "${WEB_PUBLIC_PORT:-${!vast:-$WEB_PORT}}"
+  local vast="VAST_TCP_PORT_$WEB_PORT" runpod="RUNPOD_TCP_PORT_$WEB_PORT"   # how Vast.ai / RunPod advertise it
+  echo "${WEB_PUBLIC_PORT:-${!vast:-${!runpod:-$WEB_PORT}}}"
 }
 public_ip() {
   echo "${PUBLIC_IPADDR:-${RUNPOD_PUBLIC_IP:-$(curl -fsS -m 4 https://api.ipify.org 2>/dev/null || hostname -I | cut -d' ' -f1)}}"
 }
 web_url() {
+  local runpod="RUNPOD_TCP_PORT_$WEB_PORT"
   if [ "$WEB_HOST" = 127.0.0.1 ]; then echo "http://localhost:$WEB_PORT"
+  elif [ -n "${RUNPOD_POD_ID:-}" ] && [ -z "$WEB_PUBLIC_PORT" ] && [ -z "${!runpod:-}" ]; then
+    # RunPod's HTTPS proxy (add the port under "Expose HTTP ports" in the pod settings)
+    echo "https://$RUNPOD_POD_ID-$WEB_PORT.proxy.runpod.net/?token=$(web_token)"
   else echo "http://$(public_ip):$(public_port)/?token=$(web_token)"; fi
 }
 web_apply() {     # port or access changed: rewrite the service and restart it (if Docling is installed)
@@ -401,10 +459,13 @@ web_apply() {     # port or access changed: rewrite the service and restart it (
   if [ -x "$DOCLING_HOME/venv/bin/python" ]; then svc_remove web; step_web; fi
   howto
 }
-autostart() {     # no systemd: bring everything back at login (hooked into ~/.bashrc by step_autostart)
-  if [ -x "$DOCLING_HOME/vllm/bin/vllm" ] && ! healthy && [ ! -f "$DOCLING_HOME/vllm.off" ]; then server_start >/dev/null 2>&1 || true; fi
-  svc_running watch || watch_start >/dev/null 2>&1 || true
-  svc_running web || web_start >/dev/null 2>&1 || true
+autostart() {     # no systemd: bring back what was running, at login (hooked into ~/.bashrc by step_autostart)
+  has_systemd && return 0
+  exec 9> "$DOCLING_HOME/autostart.lock"   # shells opened together: only one does it
+  if have flock; then flock -n 9 || return 0; fi
+  if [ -x "$DOCLING_HOME/vllm/bin/vllm" ] && [ ! -f "$DOCLING_HOME/vllm.off" ] && ! healthy; then server_start >/dev/null 2>&1 || true; fi
+  [ -f "$DOCLING_HOME/watch.off" ] || svc_running watch || watch_start >/dev/null 2>&1 || true
+  [ -f "$DOCLING_HOME/web.off" ] || svc_running web || web_start >/dev/null 2>&1 || true
   return 0
 }
 step_autostart() {
@@ -448,9 +509,12 @@ healthy() { curl -fsS -m 3 "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1; }
 vllm_unit() { has_systemd && [ -f /etc/systemd/system/$SERVICE.service ]; }
 
 server_start() {
-  [ -x "$DOCLING_HOME/vllm/bin/vllm" ] || { warn "vLLM isn't installed (menu: Install)."; return 1; }
+  detect_gpu
+  [ -n "$DRIVER" ] || { warn "No NVIDIA GPU: the VLM server needs one."; return 1; }
+  ensure_vlm || return 1
   rm -f "$DOCLING_HOME/vllm.off"
   healthy && { ok "Already running on port $PORT"; return; }
+  vllm_pid_alive && server_kill   # an old one on another port (settings changed): never two vLLMs on one card
   say "Starting vLLM on 127.0.0.1:$PORT (first start takes a minute or two: CUDA graphs are compiled)"
   if vllm_unit; then
     $SUDO systemctl restart $SERVICE
@@ -468,11 +532,18 @@ server_start() {
     | grep -avE "Engine core initialization failed|FA version 2" | tail -6
   return 1
 }
+vllm_pid_alive() { [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; }
+server_kill() {   # background vLLM: its whole process group (API server + engine core), then wait for the VRAM
+  local pid; pid=$(cat "$pidfile" 2>/dev/null) || return 0
+  kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+  for _ in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done
+  rm -f "$pidfile"
+}
 server_stop() {
   [ -d "$DOCLING_HOME" ] && touch "$DOCLING_HOME/vllm.off"   # autostart leaves it off until 'start'
   if vllm_unit; then $SUDO systemctl stop $SERVICE; ok "vLLM stopped"
-  elif [ -f "$pidfile" ]; then kill "$(cat "$pidfile")" 2>/dev/null || true; rm -f "$pidfile"; ok "vLLM stopped"
-  else ok "vLLM wasn't running"; fi
+  elif vllm_pid_alive; then server_kill; ok "vLLM stopped"
+  else rm -f "$pidfile"; ok "vLLM wasn't running"; fi
 }
 server_logs() {
   if vllm_unit; then $SUDO journalctl -u $SERVICE -n 200 --no-pager; else cat "$DOCLING_HOME/vllm.log" 2>/dev/null; fi
@@ -525,12 +596,24 @@ uninstall() {
   ok "Removed $DOCLING_HOME, the launchers and the services. Kept: your inbox/outbox folders, uv, apt packages, the driver, ~/.cache/huggingface."
 }
 
-ALL_STEPS="preflight apt uv docling vllm models service watch web autostart"
+# vLLM (several GB, minutes to install) only when it's used: WATCH_ENGINE=vlm or WITH_VLM=1. Otherwise it installs
+# on first use: docling-rtx start, or choosing the vlm engine in the drop-folder menu.
+ALL_STEPS="preflight apt uv docling vlm watch web autostart warmup"
+step_vlm() {   # the VLM stack, if this install uses it
+  if uses_vlm; then step_vllm; step_models; step_service
+  else ok "VLM server (vLLM) not installed: the standard engine doesn't need it. Later: $ME start"; fi
+}
+ensure_vlm() {   # install vLLM on first use
+  [ -x "$DOCLING_HOME/vllm/bin/vllm" ] && return 0
+  say "First use of the VLM engine: installing vLLM + granite-docling (a few minutes, ~8 GB)"
+  step_vllm && step_models && step_service
+}
 install_steps() {   # $@ = steps
   load_conf
   [ "$DRY" = 1 ] || save_conf
   for s in "$@"; do "step_$s"; done
-  if [[ " $* " == *" service "* ]] && [ "$DRY" = 0 ] && [ -x "$DOCLING_HOME/vllm/bin/vllm" ]; then server_start || true; fi
+  if [ "$DRY" = 0 ] && [ -x "$DOCLING_HOME/vllm/bin/vllm" ] && [ ! -f "$DOCLING_HOME/vllm.off" ] &&
+     { [[ " $* " == *" service "* ]] || { [[ " $* " == *" vlm "* ]] && uses_vlm; }; }; then server_start || true; fi
   [ "$DRY" = 1 ] && { echo; ok "Dry run: nothing was changed."; return; }
   echo; ok "Installed."; howto
   if ! [ -L /usr/local/bin/docling-rtx ] && [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
@@ -541,7 +624,7 @@ install_steps() {   # $@ = steps
 # --- whiptail menu ---------------------------------------------------------------------------------------
 menu_settings() {
   local v
-  local old_web="$WEB_HOST:$WEB_PORT:$WEB_PUBLIC_PORT"
+  local old_web="$WEB_HOST:$WEB_PORT:$WEB_PUBLIC_PORT" old_vllm="$PORT:$GPU_UTIL"
   v=$(wt --title "Web page port" --inputbox "Port the web page listens on (your GPU provider may give you one):" 9 70 "$WEB_PORT") && valid_port "$v" && WEB_PORT=$v
   v=$(wt --title "Web page access" --radiolist "How you reach the web page:" 12 78 2 \
       private "SSH tunnel only (ssh -L ...), safest" "$([ "$WEB_HOST" = 127.0.0.1 ] && echo ON || echo OFF)" \
@@ -558,10 +641,13 @@ menu_settings() {
       auto "pick from the driver" "$([ "$CUDA" = auto ] && echo ON || echo OFF)" \
       cu130 "CUDA 13.0 (driver >= 580)" "$([ "$CUDA" = cu130 ] && echo ON || echo OFF)" \
       cu128 "CUDA 12.8 (driver >= 570, RTX 50 needs this or newer)" "$([ "$CUDA" = cu128 ] && echo ON || echo OFF)" \
-      cu126 "CUDA 12.6 (driver >= 560)" "$([ "$CUDA" = cu126 ] && echo ON || echo OFF)" \
+      cu126 "CUDA 12.6 (driver >= 525)" "$([ "$CUDA" = cu126 ] && echo ON || echo OFF)" \
       cpu "CPU only" "$([ "$CUDA" = cpu ] && echo ON || echo OFF)") && CUDA=$v
   save_conf
-  if vllm_unit; then step_service; wt --yesno "Settings saved. Restart vLLM now to apply them?" 8 60 && server_start_restart; fi
+  if [ "$old_vllm" != "$PORT:$GPU_UTIL" ] && { vllm_unit || vllm_pid_alive; }; then
+    vllm_unit && step_service
+    wt --yesno "vLLM settings changed. Restart vLLM now to apply them?" 8 60 && { server_start_restart; pause; }
+  fi
   watch_apply || true
   if [ "$old_web" != "$WEB_HOST:$WEB_PORT:$WEB_PUBLIC_PORT" ]; then web_apply; pause; fi
 }
@@ -593,7 +679,10 @@ menu_watch() {
            standard "layout + tables + OCR models (best for digital PDFs)" "$([ "$WATCH_ENGINE" = standard ] && echo ON || echo OFF)" \
            vlm "granite-docling via vLLM (scans, formulas, code)" "$([ "$WATCH_ENGINE" = vlm ] && echo ON || echo OFF)" \
            local "granite-docling in-process (no server)" "$([ "$WATCH_ENGINE" = local ] && echo ON || echo OFF)") && WATCH_ENGINE=$v
-         save_conf; watch_apply || true; pause ;;
+         save_conf
+         # vlm needs the server (installed on first use), started before the watcher so its first file finds it
+         if [ "$WATCH_ENGINE" = vlm ] && ! healthy; then server_start || true; fi
+         watch_apply || true; pause ;;
       4) watch_logs | tail -60; pause ;;
       5) ls -lt "$OUTBOX" 2>/dev/null | head -20; pause ;;
       6) return 0 ;;
@@ -624,16 +713,16 @@ menu() {
       12 "Uninstall") || { clear; exit 0; }
     clear
     case $c in
-      1) wt --yesno "Install:\n\n - system packages (apt)\n - uv + Python 3.12\n - Docling with CUDA PyTorch\n - vLLM + granite-docling-258M ($SERVICE service)\n - drop folder: $INBOX -> $OUTBOX\n - web page: drag & drop, progress, downloads\n\nNeeds ~20 GB of disk and sudo. Continue?" 18 66 && { install_steps $ALL_STEPS; pause; } ;;
+      1) wt --yesno "Install:\n\n - system packages (apt)\n - uv + Python 3.12\n - Docling with CUDA PyTorch\n - VLM engine (vLLM + granite-docling): only if the drop folder uses it\n - drop folder: $INBOX -> $OUTBOX\n - web page: drag & drop, progress, downloads\n\nNeeds ~8 GB of disk (20 GB with the VLM engine) and sudo. Continue?" 18 66 && { install_steps $ALL_STEPS; pause; } ;;
       2) local picks
          picks=$(wt --title "Components" --checklist "Space to toggle, Enter to install:" 21 76 11 \
            driver "NVIDIA driver (Ubuntu, needs a reboot)" OFF \
            apt "System packages" ON \
            uv "uv (Python manager)" ON \
            docling "Docling + CUDA PyTorch" ON \
-           vllm "vLLM server engine" ON \
-           models "Download granite-docling-258M" ON \
-           service "Run vLLM as a service (systemd)" ON \
+           vllm "vLLM server engine (for the vlm engine)" OFF \
+           models "Download granite-docling-258M (vlm engine)" OFF \
+           service "Run vLLM as a service (systemd)" OFF \
            watch "Drop folder: inbox -> JSON (service)" ON \
            web "Web page: drag & drop, progress, downloads" ON \
            autostart "Restart services at login (no-systemd pods)" ON) && { install_steps preflight $(echo "$picks" | tr -d '"'); pause; } ;;

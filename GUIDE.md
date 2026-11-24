@@ -14,7 +14,7 @@ cp contracts/*.pdf prices.csv memo.docx ~/docling/inbox/
 ls ~/docling/outbox        # contract-a.json  prices.json  memo.json ...
 ```
 
-The `docling-watch` service runs this. It starts on boot and scans the inbox every 5 seconds, including subfolders, whose layout is mirrored in the outbox. Control it with `./docling-setup.sh watch start|stop|restart|logs`, or from menu 3, where you can also change the folders, output formats and engine.
+The `docling-watch` service runs this. It starts on boot and scans the inbox every 2 seconds (uploads from the web page start at once), including subfolders, whose layout is mirrored in the outbox. Control it with `./docling-setup.sh watch start|stop|restart|logs`, or from menu 3, where you can also change the folders, output formats and engine.
 
 **What gets converted:** everything Docling reads. That includes PDF, DOCX/DOC, PPTX/PPT, XLSX/XLS, CSV, ODT/ODS/ODP, HTML, Markdown, TXT, EPUB, AsciiDoc, LaTeX, email (`.eml`, `.msg`), calendars (`.ics`), XML (JATS/USPTO/XBRL) and images (PNG, JPG, TIFF, BMP, WEBP, GIF). The watcher ignores hidden files (`.name`), Office lock files (`~$name`) and audio/video.
 
@@ -24,7 +24,7 @@ The `docling-watch` service runs this. It starts on boot and scans the inbox eve
 2. **`name.json` = success.** It is a [DoclingDocument](https://docling-project.github.io/docling/concepts/docling_document/): text in reading order, headings, lists, tables as cells, page numbers and bounding boxes for PDFs.
 3. **`name.error.json` = failure.** It holds `{"source", "status", "errors", "time"}`. A failed file is not retried until it changes. Drop a fixed version under the same name and the error file is removed once it converts.
 4. **Re-conversion:** if a source file changes (newer mtime), its JSON is rewritten. Deleting a source does not delete its JSON.
-5. **Copying big files in:** a file is converted only after it stays unchanged for one scan. If a copy stalls for more than ~5 s, the file may be converted early and then again once complete. For big network copies, the safest way is to copy under a hidden name and then rename: `cp big.pdf inbox/.big.pdf && mv inbox/.big.pdf inbox/big.pdf`.
+5. **Copying big files in:** a file is converted once it stops changing (unchanged between scans, or untouched for 3 s). If a copy stalls for more than ~3 s, the file may be converted early and then again once complete. For big network copies, the safest way is to copy under a hidden name and then rename: `cp big.pdf inbox/.big.pdf && mv inbox/.big.pdf inbox/big.pdf`.
 
 Reading the JSON, in Python:
 
@@ -80,7 +80,7 @@ Each document prints `ok`, `PART` (some pages failed) or `FAIL` with the reason.
 | `--engine` | What runs | Use it for |
 |---|---|---|
 | `standard` (default) | Docling's layout, TableFormer and OCR models on the GPU | Born-digital PDFs, Office files, HTML. Most accurate tables, and fastest when the PDF already has a text layer. |
-| `vlm` | granite-docling-258M on the vLLM server; each page image becomes DocTags | Scans, photos of pages, equations, code blocks, unusual layouts. vLLM is ~4x faster than llama-server. |
+| `vlm` | granite-docling-258M on the vLLM server (installed on first use: `docling-rtx start`, or pick `vlm` in menu 3); each page image becomes DocTags | Scans, photos of pages, equations, code blocks, unusual layouts. vLLM is ~4x faster than llama-server. |
 | `local` | granite-docling loaded in-process (transformers) | No server running, or a small one-off job. |
 
 If you're unsure, run both on a few typical files and compare the Markdown:

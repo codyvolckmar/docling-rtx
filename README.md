@@ -8,7 +8,7 @@ It installs [Docling](https://github.com/docling-project/docling) on CUDA PyTorc
 
 ## Use it in 3 steps
 
-**1. Install** (Ubuntu 22.04/24.04 or Debian 12, an NVIDIA GPU, ~20 GB of disk). On the GPU server:
+**1. Install** (Ubuntu 22.04/24.04 or Debian 12, an NVIDIA GPU with driver 525+, ~8 GB of disk). On the GPU server:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/codyvolckmar/docling-rtx/main/install.sh | bash
@@ -39,7 +39,7 @@ Or use the menu: `docling-rtx`, Settings. Public mode prints `http://<server-ip>
 
 **No browser?** Copy files into `~/docling/inbox` and collect `~/docling/outbox/<name>.json`, the same pipeline. `docling-rtx watch logs` shows progress, with a line every 10% for long PDFs. The rules for an AI agent reading the outbox are in [GUIDE.md](GUIDE.md#0-the-web-page-and-the-drop-folder-the-main-workflow).
 
-**Rented pods without systemd** (most container GPU hosts): the converter, web page and vLLM run in the background and **start again when you log in** after a reboot. With systemd they're services that start on boot.
+**Rented pods without systemd** (most container GPU hosts): the converter, web page and vLLM run in the background, restart themselves if they crash, and **start again when you log in** after a reboot. A service you stopped stays stopped. With systemd they're services that start on boot.
 
 `docling-rtx` is the command for everything afterwards: `docling-rtx` (menu), `docling-rtx status`, `docling-rtx howto`. To see the plan without installing: `./docling-setup.sh --dry-run` (preview another card with `DOCLING_GPU="RTX 3090:24576:580.95:8.6"`).
 
@@ -49,13 +49,13 @@ Or use the menu: `docling-rtx`, Settings. Public mode prints `http://<server-ip>
 
 | Step | What |
 |---|---|
-| Check | Finds the GPU, VRAM and driver. Picks the PyTorch CUDA build from the driver: cu130 (driver 580+), cu128 (570+, needed for RTX 50) or cu126. Without a driver, it offers to install one (`ubuntu-drivers`, then reboot) or carries on CPU-only. |
-| System | `apt`: curl, git, whiptail, build-essential (Triton compiles kernels), libgl1/libglib2.0 (OpenCV). |
+| Check | Finds the GPU, VRAM and driver. Picks the PyTorch CUDA build from the driver: cu130 (driver 580+), cu128 (570+, needed for RTX 50) or cu126 (525+, the 535/550 drivers common on rented pods). Without a driver, it offers to install one (`ubuntu-drivers`, then reboot) or carries on CPU-only. |
+| System | `apt`: curl, git, whiptail, build-essential (Triton compiles kernels), libgl1/libglib2.0 (OpenCV). Skipped when they're already there. |
 | Python | [uv](https://docs.astral.sh/uv/) with its own Python 3.12, so the system Python is left alone. |
 | Docling | `~/.docling-rtx/venv`: CUDA PyTorch from download.pytorch.org, then `docling`. Prints whether CUDA is available. |
-| vLLM | `~/.docling-rtx/vllm`, a separate venv because vLLM pins its own torch. |
-| Models | granite-docling-258M (the `untied` revision the model card uses for vLLM, plus `main` for in-process use). Docling's layout/table/OCR models download on first use. |
-| Server | `vllm serve` with the RTX guide's settings (`--max-num-seqs 512 --max-num-batched-tokens 8192 --enable-chunked-prefill`), sized to the card: 0.5 of the GPU instead of 0.9 so the drop folder's standard pipeline fits alongside; under 10 GB, 32 parallel pages and 0.7 of the GPU; float16 on pre-RTX 30 cards, on `127.0.0.1:8000` only. Runs as the systemd unit `docling-vllm`, which starts on boot; without systemd it runs as a background process. |
+| Warm-up | Converts a one-line PDF at the end, so Docling's layout, table and OCR models are downloaded and your first document starts right away. |
+| VLM engine (optional) | **Installed on first use**, not by default: `docling-rtx start`, choosing the `vlm` engine in menu 3, or `WITH_VLM=1` at install. vLLM gets its own venv in `~/.docling-rtx/vllm`, because it pins its own torch, plus granite-docling-258M (the `untied` revision the model card uses for vLLM). That saves ~12 GB and several minutes when you only need the standard engine. |
+| Server | `vllm serve` with the RTX guide's settings (`--max-num-seqs 512 --max-num-batched-tokens 8192 --enable-chunked-prefill`), sized to the card: 0.85 of the GPU when the drop folder uses the vlm engine, 0.5 when it shares the card with the standard pipeline; under 10 GB, 32 parallel pages and 0.7 of the GPU; float16 on pre-RTX 30 cards, on `127.0.0.1:8000` only. Runs as the systemd unit `docling-vllm`, which starts on boot; without systemd it runs as a background process. |
 | Drop folder | The `docling-watch` service watches `~/docling/inbox` and writes `<name>.json` (a DoclingDocument) to `~/docling/outbox`, atomically, or `<name>.error.json` on failure. Changed files are converted again. The handover rules are in [GUIDE.md](GUIDE.md#0-the-web-page-and-the-drop-folder-the-main-workflow). |
 | Web page | `docling-web` (or a background process): drag & drop upload into the inbox, live progress from the watcher, downloads, retry. Python standard library only, on `127.0.0.1:8080` (`docling-rtx web public` for a direct link with a key). |
 | Test | `./docling-setup.sh test` converts the Docling paper with both engines into `~/.docling-rtx/test-output/`. |

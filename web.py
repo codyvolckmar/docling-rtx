@@ -12,10 +12,10 @@ it requires --token (or DOCLING_WEB_TOKEN): open http://HOST:8080/?token=... onc
 
 import argparse
 import hmac
-import io
 import json
 import os
 import shutil
+import tempfile
 import subprocess
 import sys
 import time
@@ -145,6 +145,15 @@ def archive(rel):
     return True
 
 
+def poke(rel):
+    """Wake the watcher now and tell it this inbox file is complete, so it converts it without waiting a scan."""
+    try:
+        with open(Path(A.status_file).expanduser().with_name("poke"), "a") as f:
+            f.write(str(rel) + "\n")
+    except OSError:
+        pass
+
+
 def state():
     inbox, outbox = Path(A.inbox).expanduser(), Path(A.outbox).expanduser()
     try:
@@ -202,6 +211,17 @@ class H(BaseHTTPRequestHandler):
         c = dict(x.strip().split("=", 1) for x in self.headers.get("Cookie", "").split(";") if "=" in x).get("drtx", "")
         return hmac.compare_digest(q, A.token) or hmac.compare_digest(c, A.token)
 
+    def send_file(self, path, ctype, extra=None):
+        """Stream a file (no full copy in memory: a big outbox zip or JSON must not eat the pod's RAM)."""
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(path.stat().st_size))
+        for k, v in (extra or {"Cache-Control": "no-store"}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        with open(path, "rb") as f:
+            shutil.copyfileobj(f, self.wfile, 1 << 20)
+
     def send(self, code, body=b"", ctype="text/plain; charset=utf-8", extra=None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -237,18 +257,21 @@ class H(BaseHTTPRequestHandler):
             p = self.safe(A.outbox, path[len("/files/"):])
             if not p or not p.is_file():
                 return self.send(404, b"not found")
-            data = p.read_bytes()
+            disp = f"attachment; filename*=UTF-8''{quote(p.name)}"
             ctype = "application/json" if p.suffix == ".json" else "text/plain; charset=utf-8"
-            return self.send(200, data, ctype, {"Content-Disposition": f'attachment; filename="{p.name}"'})
-        if path == "/download/outbox.zip":
-            buf, out = io.BytesIO(), Path(A.outbox).expanduser()
-            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-                for f in sorted(out.rglob("*")):
-                    rel = f.relative_to(out)
-                    if f.is_file() and not any(x.startswith(".") for x in rel.parts):
-                        z.write(f, rel)
-            return self.send(200, buf.getvalue(), "application/zip",
-                             {"Content-Disposition": 'attachment; filename="docling-outbox.zip"'})
+            return self.send_file(p, ctype, {"Content-Disposition": disp, "Cache-Control": "no-store"})
+        if path == "/download/outbox.zip":   # built in a temp file on disk, then streamed
+            out = Path(A.outbox).expanduser()
+            with tempfile.NamedTemporaryFile(suffix=".zip") as tmp:
+                with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+                    for f in sorted(out.rglob("*")):
+                        rel = f.relative_to(out)
+                        if f.is_file() and not any(x.startswith(".") for x in rel.parts):
+                            z.write(f, rel)
+                tmp.flush()
+                return self.send_file(Path(tmp.name), "application/zip",
+                                      {"Content-Disposition": 'attachment; filename="docling-outbox.zip"',
+                                       "Cache-Control": "no-store"})
         self.send(404, b"not found")
 
     def do_PUT(self):   # upload: PUT /upload/<file name>, raw body
@@ -272,6 +295,7 @@ class H(BaseHTTPRequestHandler):
             tmp.unlink(missing_ok=True)
             return self.send(400, b"upload interrupted")
         os.replace(tmp, inbox / name)
+        poke(name)
         self.send(200, b"ok")
 
     def do_POST(self):   # /retry/<inbox path>: convert again; /cancel/<inbox path>: stop or skip it
@@ -303,6 +327,7 @@ class H(BaseHTTPRequestHandler):
             p = self.safe(A.inbox, path[len("/retry/"):])
             if p and p.is_file():
                 os.utime(p)
+                poke(p.relative_to(Path(A.inbox).expanduser().resolve()))
                 return self.send(200, b"ok")
         self.send(404, b"not found")
 
@@ -345,7 +370,10 @@ button:disabled{opacity:.45;cursor:default}
 <table><thead><tr><th>Document</th><th>Status</th><th>Pages</th><th>Time</th><th>Results</th></tr></thead><tbody id="docs"></tbody></table>
 <p class="dim" id="paths"></p>
 </main><script>
-const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const enc=p=>String(p).split('/').map(encodeURIComponent).join('/');   // safe for '#', '?', '&', "'", '+' in names
+document.addEventListener('click',e=>{const b=e.target.closest('button[data-act]');if(!b||b.disabled)return;
+  ({cancel:cancelDoc,retry:retry,remove:removeDoc})[b.dataset.act](b.dataset.n)});
 const secs=t=>t==null?'':t<60?Math.round(t)+'s':t<3600?Math.floor(t/60)+'m '+String(Math.round(t%60)).padStart(2,'0')+'s':Math.floor(t/3600)+'h '+String(Math.floor(t%3600/60)).padStart(2,'0')+'m';
 const size=b=>b<1e6?(b/1e3).toFixed(0)+' KB':(b/1e6).toFixed(1)+' MB';
 async function refresh(){
@@ -368,17 +396,17 @@ async function refresh(){
     const left=c.pages_total&&c.pages_done?(c.pages_total-c.pages_done)/rate:null;
     const d=s.docs.find(x=>x.status=='converting'), stopping=d&&d.cancelling;
     const first=c.pages_total&&!c.pages_done?` &middot; the first ${Math.min(s.batch||8,c.pages_total)} pages go through all models together, so page 1 can take a while`:'';
-    $('#cur').innerHTML=`<div class="cur"><div class="curhead"><b>Converting ${esc(c.file)}</b>${d?`<button class="stop" ${stopping?'disabled':''} onclick="cancelDoc('${encodeURI(d.name)}')">${stopping?'Cancelling&hellip;':'Cancel'}</button>`:''}</div><div class="bar"><i style="width:${pct}%"></i></div>
+    $('#cur').innerHTML=`<div class="cur"><div class="curhead"><b>Converting ${esc(c.file)}</b>${d?`<button class="stop" ${stopping?'disabled':''} data-act="cancel" data-n="${esc(d.name)}">${stopping?'Cancelling&hellip;':'Cancel'}</button>`:''}</div><div class="bar"><i style="width:${pct}%"></i></div>
     <span class="dim">${c.pages_total?`page ${c.pages_done} of ${c.pages_total} &middot; `:'loading models / reading the file&hellip; &middot; '}${secs(c.elapsed)} so far${left!=null?` &middot; about ${secs(left)} left`:''}${first}</span></div>`;
   } else $('#cur').innerHTML='';
   $('#docs').innerHTML=s.docs.length?s.docs.map(d=>`<tr><td>${esc(d.name)}<br><span class="dim">${size(d.size)}</span></td>
     <td><span class="st ${d.status}">${d.status}</span>${d.status=='failed'&&d.error?`<div class="err" title="${esc(d.error)}">${esc(why(d.error))}</div>`:''}</td>
     <td>${d.pages||''}</td><td>${d.seconds==null?'':d.seconds<1?'&lt;1s':secs(d.seconds)}</td>
-    <td>${Object.entries(d.files).filter(([f])=>f!='error.json').map(([f,p])=>`<a href="/files/${encodeURI(p)}">${f}</a>`).join('')}
-    ${d.status=='failed'?`<a href="/files/${encodeURI(d.files['error.json'])}">error</a>`:''}
-    ${d.status=='failed'||d.status=='cancelled'?`<button onclick="retry('${encodeURI(d.name)}')">${d.status=='cancelled'?'convert':'retry'}</button>`:''}
-    ${['done','failed','cancelled'].includes(d.status)?`<button title="Remove from the list (the source moves to the archive, the JSON stays)" onclick="removeDoc('${encodeURI(d.name)}')">&times;</button>`:''}
-    ${d.status=='converting'||d.status=='waiting'?`<button class="stop" ${d.cancelling?'disabled':''} onclick="cancelDoc('${encodeURI(d.name)}')">${d.cancelling?'cancelling&hellip;':'cancel'}</button>`:''}</td></tr>`).join('')
+    <td>${Object.entries(d.files).filter(([f])=>f!='error.json').map(([f,p])=>`<a href="/files/${enc(p)}">${f}</a>`).join('')}
+    ${d.status=='failed'?`<a href="/files/${enc(d.files['error.json'])}">error</a>`:''}
+    ${d.status=='failed'||d.status=='cancelled'?`<button data-act="retry" data-n="${esc(d.name)}">${d.status=='cancelled'?'convert':'retry'}</button>`:''}
+    ${['done','failed','cancelled'].includes(d.status)?`<button title="Remove from the list (the source moves to the archive, the JSON stays)" data-act="remove" data-n="${esc(d.name)}">&times;</button>`:''}
+    ${d.status=='converting'||d.status=='waiting'?`<button class="stop" ${d.cancelling?'disabled':''} data-act="cancel" data-n="${esc(d.name)}">${d.cancelling?'cancelling&hellip;':'cancel'}</button>`:''}</td></tr>`).join('')
     :'<tr><td colspan="5" class="dim">No documents yet. Drop some above.</td></tr>';
   $('#paths').textContent=`Inbox: ${s.inbox}   Outbox: ${s.outbox}   Cleared documents: ${s.archive}`;
   const fin=s.docs.filter(d=>['done','failed','cancelled'].includes(d.status)).length;
@@ -395,10 +423,10 @@ function why(e){  // plain-English reason for the common failures; the full text
 async function clearDone(){
   if(!confirm('Remove all finished documents from the list?\nTheir JSON stays in the outbox; the original files move to the archive folder.'))return;
   await fetch('/clear',{method:'POST'});refresh()}
-async function removeDoc(n){const r=await fetch('/remove/'+n,{method:'POST'});if(r.status!=200)alert(await r.text());refresh()}
-async function retry(n){await fetch('/retry/'+n,{method:'POST'});refresh()}
-async function cancelDoc(n){if(!confirm('Stop converting '+decodeURI(n)+'?\nIts pages done so far are discarded. You can convert it again later.'))return;
-  await fetch('/cancel/'+n,{method:'POST'});refresh()}
+async function removeDoc(n){const r=await fetch('/remove/'+enc(n),{method:'POST'});if(r.status!=200)alert(await r.text());refresh()}
+async function retry(n){await fetch('/retry/'+enc(n),{method:'POST'});refresh()}
+async function cancelDoc(n){if(!confirm('Stop converting '+n+'?\nIts pages done so far are discarded. You can convert it again later.'))return;
+  await fetch('/cancel/'+enc(n),{method:'POST'});refresh()}
 async function upload(files){
   for(const f of files){
     $('#up').innerHTML=`<div class="cur">Uploading <b>${esc(f.name)}</b> (${size(f.size)})&hellip;<div class="bar"><i id="ub" style="width:0"></i></div></div>`;

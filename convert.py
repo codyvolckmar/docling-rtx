@@ -80,8 +80,8 @@ def target(out, rel, ext):
 
 def server_ok(url):
     base = url.split("/v1/")[0]
-    try:
-        with urllib.request.urlopen(base + "/v1/models", timeout=5) as r:
+    try:   # never through http_proxy: the server is local
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(base + "/v1/models", timeout=5) as r:
             return r.status == 200
     except Exception:
         return False
@@ -99,6 +99,7 @@ class Progress:
         self.opts = None            # the pipeline options of the running converter (cancel lowers their timeout)
         self.key = None             # inbox path of the document being converted
         self.cancelled = False
+        self.running = False        # True only inside conv.convert(): a cancel outside it must not touch the options
         self.on_hard_cancel = None
         self.lock = threading.Lock()
         self.s = {"state": "idle", "file": None, "pages_done": 0, "pages_total": 0, "started": None,
@@ -132,16 +133,19 @@ class Progress:
         asked = None
         while True:
             time.sleep(0.5)
-            key = self.key
-            if not key or not self.cancel_requested(key):
-                asked = None
-                continue
-            if not self.cancelled:
-                self.cancelled, asked = True, time.time()
-                print(f"  ...   cancelling {key}", flush=True)
-                if self.opts is not None:
-                    self.opts.document_timeout = 0.001
-            elif asked and time.time() - asked > 30 and self.key == key:
+            with self.lock:   # act only while a convert is running (not while its results are being written)
+                key = self.key if self.running else None
+                if not key or not self.cancel_requested(key):
+                    asked = None
+                    continue
+                if not self.cancelled:
+                    self.cancelled, asked = True, time.time()
+                    print(f"  ...   cancelling {key}", flush=True)
+                    if self.opts is not None:
+                        self.opts.document_timeout = 0.001
+                    continue
+                stuck = asked and time.time() - asked > 30
+            if stuck:   # outside the lock: on_hard_cancel takes it
                 print(f"  ...   {key} didn't stop within 30 s: restarting the converter", flush=True)
                 if self.on_hard_cancel:
                     self.on_hard_cancel()
@@ -187,6 +191,8 @@ class Progress:
 
     def done(self, name, status, pages, secs, error=None):
         with self.lock:
+            if self.key:   # finished, whatever happened: a late cancel request must not hit the next run
+                self.clear_cancel(self.key)
             self.key = None
             item = {"file": name, "status": status, "pages": pages, "seconds": round(secs, 1),
                     "finished": time.time(), "error": error}
@@ -295,8 +301,8 @@ def main():
     ap.add_argument("--overwrite", action="store_true", help="redo documents whose outputs already exist")
     ap.add_argument("--watch", action="store_true",
                     help="drop-folder mode: keep running and convert new or changed files as they arrive")
-    ap.add_argument("--interval", type=float, default=float(os.environ.get("DOCLING_WATCH_INTERVAL", "5")),
-                    help="--watch: seconds between folder scans; a file must be unchanged for one scan (default 5)")
+    ap.add_argument("--interval", type=float, default=float(os.environ.get("DOCLING_WATCH_INTERVAL", "2")),
+                    help="--watch: seconds between folder scans (default 2); a file is converted once it stops changing")
     ap.add_argument("--status-file", default=os.environ.get("DOCLING_STATUS_FILE"),
                     help="write live progress (current document, pages, recent results) to this JSON file")
     a = ap.parse_args()
@@ -370,6 +376,10 @@ def convert_items(conv, todo, out, a, formats, progress):
         if len(todo) > 1 or a.watch:
             print(f"  ...   {name}" + (f"  ({progress.s['pages_total']} pages)" if progress.s["pages_total"] else ""),
                   flush=True)
+        with progress.lock:
+            if progress.opts is not None:
+                progress.opts.document_timeout = None   # never inherit a cancel
+            progress.running = True
         try:
             res = conv.convert(src, raises_on_error=False)
             errors = [e.error_message for e in res.errors]
@@ -378,8 +388,10 @@ def convert_items(conv, todo, out, a, formats, progress):
         except Exception as e:   # a crash on one file must not stop the batch (or the watcher)
             res, good, status, errors = None, False, "failure", [f"{type(e).__name__}: {e}"]
         finally:
-            if progress.opts is not None:
-                progress.opts.document_timeout = None   # undo a cancel
+            with progress.lock:
+                progress.running = False
+                if progress.opts is not None:
+                    progress.opts.document_timeout = None   # undo a cancel
         if progress.cancelled:
             cancelled(src, name, key, err_path, t0)
             continue
@@ -422,8 +434,16 @@ def watch(a, out, formats):
     print(f"Watching {', '.join(a.inputs)} -> {out}  [engine: {a.engine}, formats: {', '.join(formats)}, "
           f"every {a.interval:g}s]. Ctrl+C to stop.", flush=True)
     conv, seen, progress = None, {}, Progress(a.status_file)
+    poke = progress.path.parent / "poke" if progress.path else None
     while True:
         ready = []
+        complete = set()   # inbox paths the web page says are complete (uploads, retries): no need to wait a scan
+        if poke and poke.exists():
+            try:
+                complete = set(poke.read_text().split("\n")) - {""}
+                poke.write_text("")
+            except OSError:
+                pass
         for src, rel in collect(a.inputs, out):
             try:
                 if is_done(src, rel, out, formats, skip_failed=True):
@@ -433,7 +453,8 @@ def watch(a, out, formats):
             except FileNotFoundError:   # removed while we looked
                 continue
             key = (st.st_size, st.st_mtime_ns)
-            if seen.get(src) == key:
+            # complete = unchanged since the last scan, or untouched for 3 s (copies keep bumping the mtime)
+            if seen.get(src) == key or time.time() - st.st_mtime > 3 or str(rel.parent / src.name) in complete:
                 ready.append((src, rel))
             else:
                 seen[src] = key
@@ -445,10 +466,23 @@ def watch(a, out, formats):
                 seen.pop(src, None)
         else:
             progress.queue([p.name for p in seen])   # arriving files (still being copied) + heartbeat
-        time.sleep(a.interval)
+        nap(a.interval, progress)
+
+
+def nap(seconds, progress):
+    """Sleep until the next scan, but wake at once when the web page pokes (upload, retry): no 5-10 s wait."""
+    poke = progress.path.parent / "poke" if progress.path else None
+    seen = poke.stat().st_mtime_ns if poke and poke.exists() else 0
+    end = time.time() + seconds
+    while time.time() < end:
+        time.sleep(0.2)
+        if poke and poke.exists() and poke.stat().st_mtime_ns != seen:
+            return
 
 
 if __name__ == "__main__":
+    for _k in ("NO_PROXY", "no_proxy"):   # Docling's API client (requests) must reach the local vLLM directly
+        os.environ[_k] = ",".join(x for x in ("127.0.0.1,localhost", os.environ.get(_k, "")) if x)
     try:
         main()
     except KeyboardInterrupt:
