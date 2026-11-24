@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run a command in a pseudo-terminal, drive it with keystrokes and save PNG screenshots of the screen.
 
-Used to make the README / website screenshots of Summon's dry runs (real whiptail, real script):
-    python3 -I tools/termshot.py            # writes docs/img/*.png (summon-hero.png is composed separately)
+Used to make the README screenshots of docling-setup.sh (real whiptail, real script, a preview GPU):
+    python3 -I tools/termshot.py            # writes docs/img/*.png (needs Pillow)
 A tiny VT100/xterm emulator (just what whiptail/newt and plain colored output use) feeds a PIL renderer.
 """
 import os, pty, re, select, signal, struct, fcntl, termios, time, sys
@@ -327,37 +327,23 @@ if __name__ == '__main__':
     root = os.path.dirname(here)
     out = os.path.join(root, 'docs', 'img')
     os.makedirs(out, exist_ok=True)
-    S = './summon.sh'   # run from the project folder, so no local paths end up in the screenshots
-    base = {k: v for k, v in os.environ.items() if k in ('PATH', 'HOME', 'USER')}
-    base.update(TERM='xterm-256color', LANG='C.UTF-8', LC_ALL='C.UTF-8', COLUMNS=str(COLS), LINES=str(ROWS), PS1='$ ')
-    ENTER, DOWN, SPACE = '\r', '\x1b[B', ' '
+    S = './docling-setup.sh'   # run from the project folder, so no local paths end up in the screenshots
+    home = '/home/you'         # pretend home, so no local paths end up in the screenshots either
+    path = ':'.join([os.path.expanduser('~/.local/bin'), os.environ.get('PATH', '/usr/bin:/bin')])
+    base = dict(PATH=path, HOME=home, USER='you', TERM='xterm-256color', LANG='C.UTF-8', LC_ALL='C.UTF-8',
+                COLUMNS=str(COLS), LINES=str(ROWS), PS1='$ ', DOCLING_GPU='NVIDIA GeForce RTX 5090:32607:580.95')
+    ENTER, DOWN, ESC, SPACE = '\r', '\x1b[B', '\x1b', ' '
+    title = 'docling-setup.sh  (RTX 5090, 32 GB, preview)'
 
-    # 0) Banner + plan in one screen: CTX/QUANT/port given, so no menus
-    env = dict(base, SUMMON_GPU='NVIDIA RTX A6000:49140', CTX='131072', QUANT='Q6_K')
-    run(f'cd {root}; clear; echo "$ CTX=131072 QUANT=Q6_K ./summon.sh --dry-run 40000"; "{S}" --dry-run 40000; sleep 30', env, [
-        ('until', r'Same, without menus', 15), ('shot', '00-banner-dry-run.png', 'summon.sh --dry-run  (RTX A6000, 48 GB)'),
+    # 1) Main menu, the component checklist, the status screen
+    run(f'cd {root}; clear; "{S}"', base, [
+        ('until', r'Choose:', 15), ('shot', '01-menu.png', title),
+        ('key', DOWN), ('key', ENTER), ('until', r'Space to toggle', 10), ('shot', '02-components.png', title),
+        ('key', ESC), ('until', r'Choose:', 10),
+        ('key', DOWN * 3), ('key', ENTER), ('until', r'Settings:', 15), ('shot', '03-status.png', title),
+        ('key', ENTER), ('until', r'Choose:', 10), ('key', ESC), ('wait', 1),
     ], out)
-    # 1) A6000: model menu, port, context, weights, final plan
-    env = dict(base, SUMMON_GPU='NVIDIA RTX A6000:49140')
-    run(f'cd {root}; clear; echo "$ ./summon.sh --dry-run"; "{S}" --dry-run; sleep 30', env, [
-        ('until', r'Which model', 15), ('shot', '01-model-menu-a6000.png', 'summon.sh --dry-run  (RTX A6000, 48 GB)'),
-        ('key', ENTER), ('until', r'Trade precision for speed', 10), ('shot', '11-draft-question.png', 'summon.sh --dry-run  (RTX A6000, 48 GB)'),
-        ('key', ENTER), ('until', r'Step 1/2', 10), ('shot', '03-context-menu.png', 'summon.sh --dry-run  (RTX A6000, 48 GB)'),
-        ('key', ENTER), ('until', r'Step 2/2', 10), ('shot', '04-weights-menu.png', 'summon.sh --dry-run  (RTX A6000, 48 GB)'),
-        ('key', ENTER), ('until', r'Last step: port', 10), ('shot', '02-port.png', 'summon.sh --dry-run  (RTX A6000, 48 GB)'),
-        ('key', ENTER), ('until', r'Same, without menus', 10), ('shot', '05-dry-run-plan.png', 'summon.sh --dry-run  (RTX A6000, 48 GB)'),
-    ], out)
-    # 2) RTX 3090: the model menu pre-selects Ornith 9B
-    env = dict(base, SUMMON_GPU='NVIDIA GeForce RTX 3090:24576', SUMMON_RAM='65536')   # a 64 GB RAM box: Ornith 35B fits with experts in RAM
-    run(f'cd {root}; clear; "{S}" --dry-run 40000; sleep 30', env, [
-        ('until', r'Which model', 15), ('shot', '06-model-menu-3090.png', 'summon.sh --dry-run 40000  (RTX 3090, 24 GB)'),
-        ('key', ENTER), ('until', r'Step 1/2', 10), ('key', ENTER), ('until', r'Step 2/2', 10),
-        ('shot', '07-weights-menu-3090.png', 'summon.sh --dry-run 40000  (RTX 3090, 24 GB)'),
-        ('key', ENTER), ('until', r'Same, without menus', 10), ('shot', '08-dry-run-plan-3090.png', 'summon.sh --dry-run 40000  (RTX 3090, 24 GB)'),
-    ], out)
-    # 3) Ollama model checklist
-    env = dict(base, SUMMON_GPU='NVIDIA RTX A6000:49140')
-    run(f'cd {root}; clear; "{S}" --dry-run ollama 40000; sleep 30', env, [
-        ('until', r'Which model', 25), ('shot', '09-ollama-menu.png', 'summon.sh --dry-run ollama 40000  (RTX A6000, 48 GB)'),
-        ('key', ENTER), ('until', r'Endpoint:', 15), ('shot', '10-ollama-plan.png', 'summon.sh --dry-run ollama 40000  (RTX A6000, 48 GB)'),
+    # 2) The install plan, without installing anything
+    run(f'cd {root}; clear; echo "$ ./docling-setup.sh --dry-run"; "{S}" --dry-run; sleep 30', base, [
+        ('until', r'nothing was changed', 30), ('shot', '04-dry-run.png', title),
     ], out)
