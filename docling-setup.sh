@@ -154,7 +154,7 @@ step_docling() {
   [ "$flavor" = old ] && flavor=cpu
   say "Docling + PyTorch ($flavor) in $DOCLING_HOME/venv"
   run mkdir -p "$DOCLING_HOME"
-  [ -x "$DOCLING_HOME/venv/bin/python" ] || run uv venv -q --python 3.12 "$DOCLING_HOME/venv"
+  [ -x "$DOCLING_HOME/venv/bin/python" ] || run uv venv -q --managed-python --python 3.12 "$DOCLING_HOME/venv"
   export VIRTUAL_ENV=$DOCLING_HOME/venv
   local have_build   # torch already there but a different build (e.g. +cpu after a driver install): swap it
   have_build=$("$VIRTUAL_ENV/bin/python" -c 'import torch;print(torch.__version__.partition("+")[2])' 2>/dev/null || true)
@@ -194,7 +194,12 @@ step_vllm() {
   detect_gpu
   [ -z "$DRIVER" ] && { warn "No NVIDIA driver: skipping vLLM."; return; }
   say "vLLM in $DOCLING_HOME/vllm (its own venv: it pins its own torch)"
-  [ -x "$DOCLING_HOME/vllm/bin/python" ] || run uv venv -q --python 3.12 "$DOCLING_HOME/vllm"
+  # uv's own Python, never the system one: vLLM compiles Triton/torch.compile kernels at startup and needs Python.h,
+  # which Ubuntu's python3.12 lacks without python3.12-dev ("Engine core initialization failed").
+  if [ -f "$DOCLING_HOME/vllm/pyvenv.cfg" ] && ! grep -q "/uv/python/" "$DOCLING_HOME/vllm/pyvenv.cfg"; then
+    say "Rebuilding the vLLM venv on uv's Python (the system Python has no C headers)"; run rm -rf "$DOCLING_HOME/vllm"
+  fi
+  [ -x "$DOCLING_HOME/vllm/bin/python" ] || run uv venv -q --managed-python --python 3.12 "$DOCLING_HOME/vllm"
   VIRTUAL_ENV=$DOCLING_HOME/vllm run uv pip install -q --upgrade vllm --torch-backend=auto
   [ "$DRY" = 1 ] || ok "vLLM $("$DOCLING_HOME/vllm/bin/python" -c 'import importlib.metadata as m;print(m.version("vllm"))')"
 }
@@ -317,7 +322,9 @@ server_start() {
     if ! svc_unit && ! kill -0 "$(cat "$pidfile" 2>/dev/null)" 2>/dev/null; then break; fi
     sleep 5
   done
-  warn "vLLM didn't come up. Last log lines:"; server_logs | tail -25; return 1
+  warn "vLLM didn't come up. The errors in its log (full log: $0 logs):"
+  server_logs | grep -aE "Error|ERROR|error:|out of memory|Python.h" | grep -avE "Engine core initialization failed|^\s*raise " | head -20
+  return 1
 }
 server_stop() {
   if svc_unit; then $SUDO systemctl stop $SERVICE; ok "vLLM stopped"
