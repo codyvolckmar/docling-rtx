@@ -28,7 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from convert import collect, target  # noqa: E402  (same folder: file discovery and naming stay identical)
+from convert import collect, suffixes, target  # noqa: E402  (same folder: file discovery and naming stay identical)
 
 A = None   # parsed arguments
 _gpu = {"t": 0, "v": None}
@@ -171,7 +171,7 @@ def state():
         st = {"state": "idle", "recent": [], "queue": []}
     age = time.time() - st.get("updated", 0)
     watcher = "converting" if st.get("state") == "converting" and age < 600 else "watching" if age < 30 else "stopped"
-    recent = {r["file"]: r for r in st.get("recent", [])}
+    recent = {r.get("key", r["file"]): r for r in st.get("recent", [])}
     cancel_dir = Path(A.status_file).expanduser().parent / "cancel"
     docs = []
     for src, rel in collect([str(inbox)], outbox) if inbox.is_dir() else []:
@@ -191,7 +191,7 @@ def state():
         else:
             status = "waiting"
         cancelling = (cancel_dir / quote(key, safe="")).exists() and status in ("converting", "waiting")
-        r = recent.get(name, {})
+        r = recent.get(key) or recent.get(name, {})
         docs.append({"name": key, "size": src.stat().st_size, "status": status, "cancelling": cancelling,
                      "pages": r.get("pages"), "seconds": r.get("seconds"), "error": r.get("error"),
                      "files": {f: str(p.relative_to(outbox)) for f, p in fresh.items()}, "mtime": mtime})
@@ -203,7 +203,7 @@ def state():
     port = vllm_port()
     return {"watcher": watcher, "current": cur, "vllm": vllm_up(port), "vllm_port": port, "gpu": gpu(), "docs": docs,
             "archive": str(Path(A.archive).expanduser()),
-            "device": st.get("device"), "batch": A.batch, "sys": system(),
+            "device": st.get("device"), "batch": A.batch, "sys": system(), "suffixes": sorted(suffixes()),
             "public_url": (lambda u: u and u + "/?token=" + quote(A.token))(public_url()) if A.token else None,
             "inbox": str(inbox), "outbox": str(outbox)}
 
@@ -288,12 +288,19 @@ class H(BaseHTTPRequestHandler):
         if not self.authed():
             return self.send(403, b"forbidden")
         path = urllib.parse.urlsplit(self.path).path
-        name = Path(urllib.parse.unquote(path[len("/upload/"):])).name if path.startswith("/upload/") else ""
-        if not name or name.startswith((".", "~$")):
-            return self.send(400, b"bad file name")
+        # PUT /upload/<name> or /upload/<folder>/<sub>/<name> (folder uploads keep their layout in the inbox)
+        parts = [urllib.parse.unquote(x) for x in path[len("/upload/"):].split("/")] if path.startswith("/upload/") else []
+        if not parts or any(x in ("", ".", "..") or x.startswith((".", "~$")) or "/" in x or "\\" in x for x in parts):
+            return self.send(400, b"bad file name")   # (a decoded "/" inside a part would be a path escape)
+        rel = Path(*parts)
+        if rel.suffix.lower() not in suffixes():
+            return self.send(415, f"not a format Docling reads ({rel.suffix or 'no extension'})".encode())
         inbox = Path(A.inbox).expanduser()
-        inbox.mkdir(parents=True, exist_ok=True)
-        tmp, left = inbox / f".{name}.uploading", int(self.headers.get("Content-Length", 0))
+        dst = inbox / rel
+        if inbox.resolve() not in dst.resolve().parents:   # backstop: never write outside the inbox
+            return self.send(400, b"bad file name")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        tmp, left = dst.parent / f".{dst.name}.uploading", int(self.headers.get("Content-Length", 0))
         with open(tmp, "wb") as f:   # hidden name while it arrives: the watcher ignores it until the rename
             while left > 0:
                 chunk = self.rfile.read(min(left, 1 << 20))
@@ -304,8 +311,8 @@ class H(BaseHTTPRequestHandler):
         if left:
             tmp.unlink(missing_ok=True)
             return self.send(400, b"upload interrupted")
-        os.replace(tmp, inbox / name)
-        poke(name)
+        os.replace(tmp, dst)
+        poke(rel)
         self.send(200, b"ok")
 
     def do_POST(self):   # /retry/<inbox path>: convert again; /cancel/<inbox path>: stop or skip it
@@ -375,8 +382,8 @@ button:disabled{opacity:.45;cursor:default}
 <header><h1><img src="/logo.png" alt="" onerror="this.remove()">Docling RTX</h1><div class="pills" id="pills"></div></header>
 <div class="stats" id="stats"></div>
 <div id="share"></div>
-<div id="drop"><b>Drop documents here</b> or click to choose<br><span class="dim">PDF, Word, Excel, PowerPoint, CSV, HTML, images, email&hellip; Each one becomes structured JSON.</span>
-<input type="file" id="pick" multiple hidden></div>
+<div id="drop"><b>Drop files or folders here</b> or <a href="#" id="pf">choose files</a> &middot; <a href="#" id="pd">choose a folder</a><br><span class="dim">PDF, Word, Excel, PowerPoint, CSV, HTML, images, EPUB, email&hellip; Each one becomes structured JSON. Folders keep their layout.</span>
+<input type="file" id="pick" multiple hidden><input type="file" id="pickdir" webkitdirectory multiple hidden></div>
 <div id="up"></div><div id="cur"></div>
 <div class="row"><b>Documents</b><span><button id="clear" onclick="clearDone()" title="Move finished documents to the archive folder; their JSON stays in the outbox">Clear finished</button>
 <a href="/download/outbox.zip" style="margin-left:14px">Download all results (.zip)</a></span></div>
@@ -385,7 +392,8 @@ button:disabled{opacity:.45;cursor:default}
 </main><script>
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const enc=p=>String(p).split('/').map(encodeURIComponent).join('/');   // safe for '#', '?', '&', "'", '+' in names
-document.addEventListener('click',e=>{const c=e.target.closest('button[data-copy]');
+document.addEventListener('click',e=>{if(e.target.closest('button[data-close]')){$('#up').innerHTML='';return}
+  const c=e.target.closest('button[data-copy]');
   if(c){navigator.clipboard.writeText($('#pub').textContent).then(()=>{c.textContent='copied';setTimeout(()=>c.textContent='copy',1500)});return}
   const b=e.target.closest('button[data-act]');if(!b||b.disabled)return;
   ({cancel:cancelDoc,retry:retry,remove:removeDoc})[b.dataset.act](b.dataset.n)});
@@ -393,6 +401,7 @@ const secs=t=>t==null?'':t<60?Math.round(t)+'s':t<3600?Math.floor(t/60)+'m '+Str
 const size=b=>b<1e6?(b/1e3).toFixed(0)+' KB':(b/1e6).toFixed(1)+' MB';
 async function refresh(){
   let s; try{s=await (await fetch('/api/state')).json()}catch(e){return}
+  SUPPORTED=new Set(s.suffixes||[]);
   const w={converting:['busy','converting'],watching:['on','watching the inbox'],stopped:['off','watcher stopped: run docling-rtx watch start']}[s.watcher];
   $('#pills').innerHTML=`<span class="pill"><span class="dot ${w[0]}"></span>${w[1]}</span>`+
     (s.device=='cpu'?`<span class="pill cpu" title="PyTorch has no CUDA in the converter: run docling-rtx status">&#9888; converter on CPU (slow)</span>`:s.device=='cuda'?`<span class="pill"><span class="dot on"></span>converter on GPU</span>`:'')+
@@ -444,21 +453,50 @@ async function removeDoc(n){const r=await fetch('/remove/'+enc(n),{method:'POST'
 async function retry(n){await fetch('/retry/'+enc(n),{method:'POST'});refresh()}
 async function cancelDoc(n){if(!confirm('Stop converting '+n+'?\nIts pages done so far are discarded. You can convert it again later.'))return;
   await fetch('/cancel/'+enc(n),{method:'POST'});refresh()}
-async function upload(files){
-  const viaTunnel=location.hostname.endsWith('.trycloudflare.com');
-  for(const f of files){
-    if(viaTunnel&&f.size>100e6){alert(f.name+' is '+size(f.size)+': files over 100 MB can\'t pass the Cloudflare tunnel.\nCopy it into the inbox folder instead (scp), or use an SSH tunnel.');continue}
-    $('#up').innerHTML=`<div class="cur">Uploading <b>${esc(f.name)}</b> (${size(f.size)})&hellip;<div class="bar"><i id="ub" style="width:0"></i></div></div>`;
-    await new Promise(ok=>{const x=new XMLHttpRequest();x.open('PUT','/upload/'+encodeURIComponent(f.name));
-      x.upload.onprogress=e=>{const b=$('#ub');if(b&&e.lengthComputable)b.style.width=(100*e.loaded/e.total)+'%'};
-      x.onloadend=()=>{if(x.status!=200)alert('Upload failed: '+f.name+' ('+x.status+' '+x.responseText+')');ok()};x.send(f)});
-  }
-  $('#up').innerHTML='';refresh();
+let SUPPORTED=null;   // file extensions Docling reads (from /api/state)
+const ext=n=>{const i=n.lastIndexOf('.');return i>0?n.slice(i).toLowerCase():''};
+async function filesFrom(dt){   // dropped files and folders -> [{file, path}] (folders walked recursively)
+  const entries=[...dt.items].filter(i=>i.kind=='file').map(i=>i.webkitGetAsEntry&&i.webkitGetAsEntry()).filter(Boolean);
+  if(!entries.length)return [...dt.files].map(f=>({file:f,path:f.name}));   // must be read before the first await
+  const out=[];
+  const walk=async(en,prefix)=>{
+    if(en.isFile){out.push({file:await new Promise((ok,ko)=>en.file(ok,ko)),path:prefix+en.name});return}
+    const r=en.createReader();let batch;
+    do{batch=await new Promise((ok,ko)=>r.readEntries(ok,ko));for(const c of batch)await walk(c,prefix+en.name+'/')}while(batch.length);
+  };
+  for(const en of entries)await walk(en,'');
+  return out;
 }
-const drop=$('#drop');drop.onclick=()=>$('#pick').click();$('#pick').onchange=e=>upload(e.target.files);
+function sendOne(f,path,i,n){   // one PUT with a progress bar; resolves to '' (ok) or the reason it failed
+  $('#up').innerHTML=`<div class="cur">Uploading ${n>1?`${i} of ${n}: `:''}<b>${esc(path)}</b> (${size(f.size)})&hellip;<div class="bar"><i id="ub" style="width:0"></i></div></div>`;
+  return new Promise(ok=>{const x=new XMLHttpRequest();x.open('PUT','/upload/'+enc(path));
+    x.upload.onprogress=e=>{const b=$('#ub');if(b&&e.lengthComputable)b.style.width=(100*e.loaded/e.total)+'%'};
+    x.onloadend=()=>ok(x.status==200?'':x.status?`${x.status} ${x.responseText}`:'connection lost (unreadable file, or the server went away)');
+    x.send(f)});
+}
+async function upload(items){
+  if(!SUPPORTED)await refresh();
+  const viaTunnel=location.hostname.endsWith('.trycloudflare.com'), skipped={}, failed=[], todo=[];
+  for(const it of items){
+    const name=it.path.split('/').pop();
+    if(it.path.split('/').some(p=>p.startsWith('.')||p.startsWith('~$')))continue;          // hidden / lock files
+    if(SUPPORTED&&!SUPPORTED.has(ext(name))){const k=ext(name)||'no extension';skipped[k]=(skipped[k]||0)+1;continue}
+    if(viaTunnel&&it.file.size>100e6){failed.push(`${it.path}: ${size(it.file.size)}, over the tunnel's 100 MB limit (copy it into the inbox with scp)`);continue}
+    todo.push(it);
+  }
+  let done=0;
+  for(const [i,it] of todo.entries()){const why=await sendOne(it.file,it.path,i+1,todo.length);if(why)failed.push(`${it.path}: ${why}`);else done++}
+  const sk=Object.entries(skipped).map(([k,v])=>`${k} &times;${v}`).join(', ');
+  $('#up').innerHTML=(done||sk||failed.length)?`<div class="cur"><div class="curhead"><span>Uploaded <b>${done}</b> file${done==1?'':'s'}${sk?` &middot; skipped (not a format Docling reads): ${sk}`:''}${failed.length?` &middot; <span class="failed">${failed.length} failed</span>`:''}</span><button data-close="1">&times;</button></div>${failed.map(f=>`<div class="err">${esc(f)}</div>`).join('')}</div>`:'';
+  refresh();
+}
+const drop=$('#drop');
+drop.onclick=e=>{if(e.target.id=='pd'){e.preventDefault();$('#pickdir').click()}else{e.preventDefault();$('#pick').click()}};
+$('#pick').onchange=e=>{upload([...e.target.files].map(f=>({file:f,path:f.name})));e.target.value=''};
+$('#pickdir').onchange=e=>{upload([...e.target.files].map(f=>({file:f,path:f.webkitRelativePath||f.name})));e.target.value=''};
 ['dragenter','dragover'].forEach(t=>drop.addEventListener(t,e=>{e.preventDefault();drop.classList.add('over')}));
 ['dragleave','drop'].forEach(t=>drop.addEventListener(t,e=>{e.preventDefault();drop.classList.remove('over')}));
-drop.addEventListener('drop',e=>upload(e.dataTransfer.files));
+drop.addEventListener('drop',async e=>upload(await filesFrom(e.dataTransfer)));
 refresh();setInterval(refresh,2000);
 </script></body></html>"""
 

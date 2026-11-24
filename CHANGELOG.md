@@ -2,6 +2,14 @@
 
 All notable changes to Docling RTX. Install time on a fresh pod: **about 12 minutes**, mostly downloading CUDA PyTorch and Docling's models. Updating reruns the installer, which reuses everything already downloaded: `cd ~/docling-rtx && git pull && ./docling-setup.sh install`.
 
+## 1.4.1 (2026-11-24): folder uploads
+
+- **Upload whole folders.** Drag a folder onto the page, or use **choose a folder**. Every file inside is uploaded with its subfolders, and the outbox mirrors the layout. Before, a dropped folder failed with "Upload failed: <folder> (0)".
+- Files Docling can't read (for example `.mobi`) are skipped before upload, and listed in one summary instead of an error per file. Hidden files (`.DS_Store`) are ignored.
+- One progress line for the batch ("Uploading 3 of 12: ..."), then a summary of uploaded, skipped and failed files.
+- The server checks every part of an uploaded path, rejects anything that would land outside the inbox, and accepts only formats Docling reads.
+- Pages and time are shown per file, even when two folders contain files with the same name.
+
 ## 1.4.0 (2026-11-24): public link
 
 - **Cloudflare quick tunnel, on by default.** When the web page launches, `cloudflared` gives it a public `https://<random>.trycloudflare.com` address. You need no Cloudflare account and no open port on the pod. Anyone with the link and its key can use the page. Without the key it answers 403, and the key is now required even from localhost. The page shows the current link with a **copy** button, since the address changes when the tunnel restarts. `docling-rtx web url` prints it too.

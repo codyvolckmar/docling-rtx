@@ -191,12 +191,13 @@ class Progress:
 
     def done(self, name, status, pages, secs, error=None):
         with self.lock:
+            key = self.key or name   # inbox path: two folders can hold files with the same name
             if self.key:   # finished, whatever happened: a late cancel request must not hit the next run
                 self.clear_cancel(self.key)
             self.key = None
-            item = {"file": name, "status": status, "pages": pages, "seconds": round(secs, 1),
+            item = {"file": name, "key": key, "status": status, "pages": pages, "seconds": round(secs, 1),
                     "finished": time.time(), "error": error}
-            self.s["recent"] = [item] + [r for r in self.s["recent"] if r["file"] != name][:49]
+            self.s["recent"] = [item] + [r for r in self.s["recent"] if r.get("key", r["file"]) != key][:199]
             self.s.update(state="idle", file=None, key=None, pages_done=0, pages_total=0, started=None)
             self.write()
 
@@ -360,6 +361,7 @@ def convert_items(conv, todo, out, a, formats, progress):
                   "time": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}
         write_atomic(err_path, lambda p: p.write_text(json.dumps(report, indent=2), encoding="utf-8"))
         progress.clear_cancel(key)
+        progress.key = key   # also when it was cancelled while waiting (start() never ran)
         progress.done(name, "cancelled", 0, time.time() - t0, "Cancelled")
         print(f"  STOP  {name}: cancelled", flush=True)
 
