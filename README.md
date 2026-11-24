@@ -33,7 +33,7 @@ docling-rtx web public | private       # direct link with a key / SSH tunnel onl
 
 Or use the menu: `docling-rtx`, Settings. Public mode prints `http://<server-ip>:<public port>/?token=...`, protected by a random key. On Vast.ai the public port is detected automatically. It's plain HTTP, so use the SSH tunnel on untrusted networks.
 
-**3. Drag documents onto the page.** Each one shows *waiting*, then *converting* with a page-by-page progress bar and time left, then *done* with a **json** link. Failures say why in plain English and have a **retry** button. **Download all results (.zip)** gets everything.
+**3. Drag documents onto the page.** Each one shows *waiting*, then *converting* with a page-by-page progress bar and time left, then *done* with a **json** link. Failures say why in plain English and have a **retry** button. **Download all results (.zip)** gets everything. **Cancel** stops a running document. **Clear finished** empties the list: originals move to `~/docling/archive/`, and the JSON stays in the outbox.
 
 ![Web page: results](docs/img/07-web-done.png)
 

@@ -15,6 +15,7 @@ import hmac
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -51,6 +52,24 @@ def vllm_up():
             return r.status == 200
     except Exception:
         return False
+
+
+FINISHED = ("done", "failed", "cancelled")
+
+
+def archive(rel):
+    """Move a finished document's source out of the inbox into the archive folder (same subfolders), so it leaves
+    the list. Its results stay in the outbox. Never overwrites: a name that's taken gets a timestamp."""
+    inbox, arch = Path(A.inbox).expanduser().resolve(), Path(A.archive).expanduser()
+    src = (inbox / rel).resolve()
+    if inbox not in src.parents or not src.is_file():
+        return False
+    dst = arch / src.relative_to(inbox)
+    if dst.exists():
+        dst = dst.with_name(f"{dst.stem}.{time.strftime('%Y%m%d-%H%M%S')}{dst.suffix}")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dst))
+    return True
 
 
 def state():
@@ -91,6 +110,7 @@ def state():
         cur = {k: st.get(k) for k in ("file", "key", "pages_done", "pages_total", "started")}
         cur["elapsed"] = time.time() - (st.get("started") or time.time())
     return {"watcher": watcher, "current": cur, "vllm": vllm_up(), "gpu": gpu(), "docs": docs,
+            "archive": str(Path(A.archive).expanduser()),
             "device": st.get("device"), "batch": A.batch,
             "inbox": str(inbox), "outbox": str(outbox)}
 
@@ -178,8 +198,21 @@ class H(BaseHTTPRequestHandler):
         if not self.authed():
             return self.send(403, b"forbidden")
         path = urllib.parse.urlsplit(self.path).path
+        if path == "/clear":   # move every finished document's source to the archive
+            n = sum(archive(d["name"]) for d in state()["docs"] if d["status"] in FINISHED)
+            return self.send(200, json.dumps({"cleared": n}).encode(), "application/json")
+        if path.startswith("/remove/"):
+            rel = urllib.parse.unquote(path[len("/remove/"):])
+            d = next((d for d in state()["docs"] if d["name"] == rel), None)
+            if d and d["status"] in FINISHED and archive(rel):
+                return self.send(200, b"ok")
+            return self.send(409, b"only finished documents can be removed (cancel it first)")
         if path.startswith("/cancel/"):
             p = self.safe(A.inbox, path[len("/cancel/"):])
+            rel = urllib.parse.unquote(path[len("/cancel/"):])
+            d = next((d for d in state()["docs"] if d["name"] == rel), None)
+            if not d or d["status"] not in ("converting", "waiting"):
+                return self.send(409, b"only waiting or converting documents can be cancelled")
             if p and p.is_file():
                 d = Path(A.status_file).expanduser().parent / "cancel"
                 d.mkdir(parents=True, exist_ok=True)
@@ -213,13 +246,15 @@ th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line)}th{c
 .curhead{display:flex;justify-content:space-between;align-items:center;gap:12px}
 a{color:var(--acc);text-decoration:none;margin-right:10px}a:hover{text-decoration:underline}.dim{color:var(--dim);font-size:13px}
 button{background:none;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:3px 10px;cursor:pointer}
+button:disabled{opacity:.45;cursor:default}
 .row{display:flex;justify-content:space-between;align-items:center;margin:22px 0 10px}.err{color:var(--bad);font-size:12px;max-width:420px}
 </style></head><body><main>
 <header><h1>Docling RTX</h1><div class="pills" id="pills"></div></header>
 <div id="drop"><b>Drop documents here</b> or click to choose<br><span class="dim">PDF, Word, Excel, PowerPoint, CSV, HTML, images, email&hellip; Each one becomes structured JSON.</span>
 <input type="file" id="pick" multiple hidden></div>
 <div id="up"></div><div id="cur"></div>
-<div class="row"><b>Documents</b><a href="/download/outbox.zip">Download all results (.zip)</a></div>
+<div class="row"><b>Documents</b><span><button id="clear" onclick="clearDone()" title="Move finished documents to the archive folder; their JSON stays in the outbox">Clear finished</button>
+<a href="/download/outbox.zip" style="margin-left:14px">Download all results (.zip)</a></span></div>
 <table><thead><tr><th>Document</th><th>Status</th><th>Pages</th><th>Time</th><th>Results</th></tr></thead><tbody id="docs"></tbody></table>
 <p class="dim" id="paths"></p>
 </main><script>
@@ -247,9 +282,12 @@ async function refresh(){
     <td>${Object.entries(d.files).filter(([f])=>f!='error.json').map(([f,p])=>`<a href="/files/${encodeURI(p)}">${f}</a>`).join('')}
     ${d.status=='failed'?`<a href="/files/${encodeURI(d.files['error.json'])}">error</a>`:''}
     ${d.status=='failed'||d.status=='cancelled'?`<button onclick="retry('${encodeURI(d.name)}')">${d.status=='cancelled'?'convert':'retry'}</button>`:''}
+    ${['done','failed','cancelled'].includes(d.status)?`<button title="Remove from the list (the source moves to the archive, the JSON stays)" onclick="removeDoc('${encodeURI(d.name)}')">&times;</button>`:''}
     ${d.status=='converting'||d.status=='waiting'?`<button class="stop" ${d.cancelling?'disabled':''} onclick="cancelDoc('${encodeURI(d.name)}')">${d.cancelling?'cancelling&hellip;':'cancel'}</button>`:''}</td></tr>`).join('')
     :'<tr><td colspan="5" class="dim">No documents yet. Drop some above.</td></tr>';
-  $('#paths').textContent=`Inbox: ${s.inbox}   Outbox: ${s.outbox}`;
+  $('#paths').textContent=`Inbox: ${s.inbox}   Outbox: ${s.outbox}   Cleared documents: ${s.archive}`;
+  const fin=s.docs.filter(d=>['done','failed','cancelled'].includes(d.status)).length;
+  $('#clear').disabled=!fin; $('#clear').textContent=fin?`Clear finished (${fin})`:'Clear finished';
 }
 function why(e){  // plain-English reason for the common failures; the full text is in the tooltip and the error file
   if(/could not load document|trailer dictionary|not valid/i.test(e))return 'Not a readable PDF (damaged, or not really a PDF).';
@@ -259,6 +297,10 @@ function why(e){  // plain-English reason for the common failures; the full text
   if(/No vLLM server|Connection/i.test(e))return 'The VLM server is not running (docling-rtx start).';
   return e.length>160?e.slice(0,160)+'…':e;
 }
+async function clearDone(){
+  if(!confirm('Remove all finished documents from the list?\nTheir JSON stays in the outbox; the original files move to the archive folder.'))return;
+  await fetch('/clear',{method:'POST'});refresh()}
+async function removeDoc(n){const r=await fetch('/remove/'+n,{method:'POST'});if(r.status!=200)alert(await r.text());refresh()}
 async function retry(n){await fetch('/retry/'+n,{method:'POST'});refresh()}
 async function cancelDoc(n){if(!confirm('Stop converting '+decodeURI(n)+'?\nIts pages done so far are discarded. You can convert it again later.'))return;
   await fetch('/cancel/'+n,{method:'POST'});refresh()}
@@ -284,6 +326,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--inbox", default="~/docling/inbox")
     ap.add_argument("--outbox", default="~/docling/outbox")
+    ap.add_argument("--archive", default=None, help="where cleared documents go (default: archive/ next to the inbox)")
     ap.add_argument("--status-file", default="~/.docling-rtx/watch-status.json")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8080)
@@ -291,6 +334,7 @@ def main():
     ap.add_argument("--token", default=os.environ.get("DOCLING_WEB_TOKEN", ""))
     ap.add_argument("--batch", type=int, default=0, help="the converter's batch size (shown while page 1 is pending)")
     A = ap.parse_args()
+    A.archive = A.archive or str(Path(A.inbox).expanduser().parent / "archive")
     if A.host not in ("127.0.0.1", "localhost", "::1") and not A.token:
         sys.exit("Listening beyond localhost needs a --token (or DOCLING_WEB_TOKEN).")
     os.makedirs(Path(A.inbox).expanduser(), exist_ok=True)

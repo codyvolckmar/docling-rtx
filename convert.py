@@ -383,6 +383,7 @@ def convert_items(conv, todo, out, a, formats, progress):
         if progress.cancelled:
             cancelled(src, name, key, err_path, t0)
             continue
+        progress.clear_cancel(key)   # a cancel that arrived as it finished: drop it, or it would hit the next run
         if not good:
             failed += 1
             print(f"  FAIL  {name}: {'; '.join(errors) or status}", flush=True)
