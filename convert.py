@@ -26,6 +26,7 @@ import datetime
 import json
 import os
 import sys
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -85,7 +86,75 @@ def server_ok(url):
         return False
 
 
-def build_converter(a):
+class Progress:
+    """Live progress for long documents: a log line every 10% (rate, time left) and, with --status-file, a small
+    JSON file (current document, pages done/total, queue, recent results) that web.py shows. Also the callback
+    Docling calls after every page."""
+
+    def __init__(self, path=None):
+        self.path = Path(path).expanduser() if path else None
+        self.lock = threading.Lock()
+        self.s = {"state": "idle", "file": None, "pages_done": 0, "pages_total": 0, "started": None,
+                  "queue": [], "recent": []}
+        self.logged_tenth, self.first = 0, None
+        self.written = 0.0
+        if self.path and self.path.exists():   # keep the recent results across restarts
+            try:
+                self.s["recent"] = json.loads(self.path.read_text())["recent"]
+            except Exception:
+                pass
+
+    def write(self, force=True):
+        if not self.path or (not force and time.time() - self.written < 1):
+            return
+        self.written = self.s["updated"] = time.time()
+        data = json.dumps(self.s)
+        write_atomic(self.path, lambda p: p.write_text(data, encoding="utf-8"))
+
+    def queue(self, names):
+        with self.lock:
+            self.s["queue"] = names
+            self.write()
+
+    def start(self, name, queue):
+        with self.lock:
+            self.s.update(state="converting", file=name, pages_done=0, pages_total=0, started=time.time(), queue=queue)
+            self.logged_tenth, self.first = 0, None
+            self.write()
+
+    def __call__(self, ev):   # Docling's progress_callback
+        if type(ev).__name__ != "PageCompletedProgress":
+            return
+        with self.lock:
+            s = self.s
+            s["pages_done"], s["pages_total"] = ev.completed_pages, ev.total_pages
+            self.write(force=False)
+            tenth = ev.completed_pages * 10 // max(ev.total_pages, 1)
+            if self.first is None:   # rate from the first finished page on: model loading would skew it
+                self.first = (time.time(), ev.completed_pages)
+            if ev.total_pages >= 20 and tenth > self.logged_tenth and ev.completed_pages < ev.total_pages:
+                self.logged_tenth = tenth
+                dt, dp = time.time() - self.first[0], ev.completed_pages - self.first[1]
+                rate = dp / dt if dt > 0 and dp > 0 else ev.completed_pages / max(time.time() - s["started"], 1e-6)
+                left = (ev.total_pages - ev.completed_pages) / rate if rate else 0
+                print(f"        {s['file']}: {ev.completed_pages}/{ev.total_pages} pages, {rate:.2f} pages/s, "
+                      f"~{fmt_secs(left)} left", flush=True)
+
+    def done(self, name, status, pages, secs, error=None):
+        with self.lock:
+            item = {"file": name, "status": status, "pages": pages, "seconds": round(secs, 1),
+                    "finished": time.time(), "error": error}
+            self.s["recent"] = [item] + [r for r in self.s["recent"] if r["file"] != name][:49]
+            self.s.update(state="idle", file=None, pages_done=0, pages_total=0, started=None)
+            self.write()
+
+
+def fmt_secs(t):
+    t = int(t)
+    return f"{t // 3600}h{t % 3600 // 60:02d}m" if t >= 3600 else f"{t // 60}m{t % 60:02d}s" if t >= 60 else f"{t}s"
+
+
+def build_converter(a, progress=None):
     from docling.datamodel.accelerator_options import AcceleratorDevice, AcceleratorOptions
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.settings import settings
@@ -104,7 +173,7 @@ def build_converter(a):
             opts.images_scale = 2.0
         fmt = {InputFormat.PDF: PdfFormatOption(pipeline_options=opts),
                InputFormat.IMAGE: ImageFormatOption(pipeline_options=opts)}
-        return DocumentConverter(format_options=fmt)
+        return DocumentConverter(format_options=fmt, progress_callback=progress)
 
     from docling.datamodel.pipeline_options import VlmConvertOptions, VlmPipelineOptions
     from docling.pipeline.vlm_pipeline import VlmPipeline
@@ -128,7 +197,7 @@ def build_converter(a):
         opts.generate_picture_images = True
     fmt = {InputFormat.PDF: PdfFormatOption(pipeline_cls=VlmPipeline, pipeline_options=opts),
            InputFormat.IMAGE: ImageFormatOption(pipeline_cls=VlmPipeline, pipeline_options=opts)}
-    return DocumentConverter(format_options=fmt)
+    return DocumentConverter(format_options=fmt, progress_callback=progress)
 
 
 def main():
@@ -151,6 +220,8 @@ def main():
                     help="drop-folder mode: keep running and convert new or changed files as they arrive")
     ap.add_argument("--interval", type=float, default=float(os.environ.get("DOCLING_WATCH_INTERVAL", "5")),
                     help="--watch: seconds between folder scans; a file must be unchanged for one scan (default 5)")
+    ap.add_argument("--status-file", default=os.environ.get("DOCLING_STATUS_FILE"),
+                    help="write live progress (current document, pages, recent results) to this JSON file")
     a = ap.parse_args()
     formats = a.to or ["md"]
     out = Path(a.out).expanduser()
@@ -166,7 +237,8 @@ def main():
     print(f"{len(todo)} document(s) -> {out}  [engine: {a.engine}, formats: {', '.join(formats)}]"
           + (f", {len(items) - len(todo)} already done" if len(items) > len(todo) else ""))
     t0 = time.time()
-    ok, failed, pages = convert_items(build_converter(a), todo, out, a, formats)
+    progress = Progress(a.status_file)
+    ok, failed, pages = convert_items(build_converter(a, progress), todo, out, a, formats, progress)
     dt = time.time() - t0
     print(f"Done: {ok} converted, {failed} failed, {pages} pages in {dt:.1f}s"
           + (f" ({pages / dt:.2f} pages/s)" if dt > 0 and pages else "") + f". Output: {out}")
@@ -195,14 +267,18 @@ def write_atomic(dst, write):
         tmp.unlink(missing_ok=True)
 
 
-def convert_items(conv, todo, out, a, formats):
+def convert_items(conv, todo, out, a, formats, progress):
     from docling.datamodel.base_models import ConversionStatus
     from docling_core.types.doc import ImageRefMode
 
     ok = failed = pages = 0
-    for src, rel in todo:
+    for i, (src, rel) in enumerate(todo):
         name = src if isinstance(src, str) else src.name
         err_path = target(out, rel, "error.json")
+        progress.start(name, [s if isinstance(s, str) else s.name for s, _ in todo[i + 1:]])
+        t0 = time.time()
+        if len(todo) > 1 or a.watch:
+            print(f"  ...   {name}", flush=True)
         try:
             res = conv.convert(src, raises_on_error=False)
             errors = [e.error_message for e in res.errors]
@@ -216,6 +292,7 @@ def convert_items(conv, todo, out, a, formats):
             report = {"source": str(src), "status": status, "errors": errors,
                       "time": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}
             write_atomic(err_path, lambda p: p.write_text(json.dumps(report, indent=2), encoding="utf-8"))
+            progress.done(name, "failed", 0, time.time() - t0, "; ".join(errors) or status)
             continue
         doc = res.document
         for f in formats:
@@ -230,7 +307,9 @@ def convert_items(conv, todo, out, a, formats):
         pages += n
         ok += 1
         tag = "PART " if res.status == ConversionStatus.PARTIAL_SUCCESS else "ok   "
-        print(f"  {tag} {name}" + (f"  ({n} page{'s' if n != 1 else ''})" if n else ""), flush=True)
+        secs = time.time() - t0
+        print(f"  {tag} {name}  (" + (f"{n} page{'s' if n != 1 else ''}, " if n else "") + f"{fmt_secs(secs)})", flush=True)
+        progress.done(name, "partial" if tag.startswith("PART") else "ok", n, secs)
     return ok, failed, pages
 
 
@@ -244,7 +323,7 @@ def watch(a, out, formats):
     out.mkdir(parents=True, exist_ok=True)
     print(f"Watching {', '.join(a.inputs)} -> {out}  [engine: {a.engine}, formats: {', '.join(formats)}, "
           f"every {a.interval:g}s]. Ctrl+C to stop.", flush=True)
-    conv, seen = None, {}
+    conv, seen, progress = None, {}, Progress(a.status_file)
     while True:
         ready = []
         for src, rel in collect(a.inputs, out):
@@ -261,11 +340,13 @@ def watch(a, out, formats):
             else:
                 seen[src] = key
         if ready:
-            conv = conv or build_converter(a)
+            conv = conv or build_converter(a, progress)
             print(f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S}  {len(ready)} new document(s)", flush=True)
-            convert_items(conv, ready, out, a, formats)
+            convert_items(conv, ready, out, a, formats, progress)
             for src, _ in ready:
                 seen.pop(src, None)
+        else:
+            progress.queue([p.name for p in seen])   # arriving files (still being copied) + heartbeat
         time.sleep(a.interval)
 
 

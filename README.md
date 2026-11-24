@@ -1,39 +1,40 @@
 # Docling RTX
 
-**One script turns a fresh Linux box with an NVIDIA RTX card into a GPU document-processing machine.** Drop PDFs, CSVs, Office files, HTML or images into `~/docling/inbox`, and structured JSON for your AI agent appears in `~/docling/outbox`.
+**One command turns a rented or local Linux box with an NVIDIA GPU into a document-processing machine.** Drag PDFs, CSVs, Office files, HTML or images onto a web page (or drop them in a folder), and structured JSON for your AI agent comes out.
 
-It installs [Docling](https://github.com/docling-project/docling) (PDF, Office, HTML and images to Markdown/JSON/HTML) on CUDA PyTorch. It also serves IBM's [granite-docling-258M](https://huggingface.co/ibm-granite/granite-docling-258M) vision-language model with vLLM, the fast path from Docling's [RTX guide](https://docling-project.github.io/docling/getting_started/rtx/#5-install-and-run-docling). You drive it from a whiptail menu, then convert documents with one command.
+It installs [Docling](https://github.com/docling-project/docling) on CUDA PyTorch and serves IBM's [granite-docling-258M](https://huggingface.co/ibm-granite/granite-docling-258M) vision-language model with vLLM, the fast path from Docling's [RTX guide](https://docling-project.github.io/docling/getting_started/rtx/#5-install-and-run-docling). Forked from [Summon](https://github.com/codyvolckmar/summon).
 
-Forked from [Summon](https://github.com/codyvolckmar/summon), keeping its approach: one commented bash file, a whiptail menu, a dry run and real screenshots.
+![Web page: converting a 40-page PDF](docs/img/06-web-converting.png)
+
+## Use it in 3 steps
+
+**1. Install** (Ubuntu 22.04/24.04 or Debian 12, an NVIDIA GPU, ~20 GB of disk). On the GPU server:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/codyvolckmar/docling-rtx/main/install.sh | bash
+```
+
+It runs for a few minutes and ends with a **How to use** box that has your web address.
+
+**2. Open the web page.** It listens on the server only. From your laptop, add `-L 8080:127.0.0.1:8080` to the ssh command you already use for the server, then open **http://localhost:8080**:
+
+```bash
+ssh -L 8080:127.0.0.1:8080 root@<server> -p <port>      # keep this open while you use the page
+```
+
+If your GPU host exposes ports and you'd rather have a direct link, run `docling-rtx web public`. It prints `http://<server-ip>:8080/?token=...`, protected by a random key. Plain HTTP, so use the SSH tunnel on untrusted networks.
+
+**3. Drag documents onto the page.** Each one shows *waiting*, then *converting* with a page-by-page progress bar and time left, then *done* with a **json** link. Failures say why in plain English and have a **retry** button. **Download all results (.zip)** gets everything.
+
+![Web page: results](docs/img/07-web-done.png)
+
+**No browser?** Copy files into `~/docling/inbox` and collect `~/docling/outbox/<name>.json`, the same pipeline. `docling-rtx watch logs` shows progress, with a line every 10% for long PDFs. The rules for an AI agent reading the outbox are in [GUIDE.md](GUIDE.md#0-the-web-page-and-the-drop-folder-the-main-workflow).
+
+**Rented pods without systemd** (most container GPU hosts): the converter, web page and vLLM run in the background and **start again when you log in** after a reboot. With systemd they're services that start on boot.
+
+`docling-rtx` is the command for everything afterwards: `docling-rtx` (menu), `docling-rtx status`, `docling-rtx howto`. To see the plan without installing: `./docling-setup.sh --dry-run` (preview another card with `DOCLING_GPU="RTX 3090:24576:580.95:8.6"`).
 
 ![Main menu](docs/img/01-menu.png)
-
-## Install
-
-Ubuntu 22.04/24.04 or Debian 12 (WSL 2 works too), an NVIDIA GPU (RTX recommended; a 6 GB GTX 1660 Ti runs it), ~20 GB of disk and sudo:
-
-```bash
-git clone https://github.com/codyvolckmar/docling-rtx && cd docling-rtx
-./docling-setup.sh            # menu -> 1 "Install everything"
-./docling-setup.sh install    # or: the same without questions
-```
-
-Then drop documents in:
-
-```bash
-cp *.pdf *.csv *.docx ~/docling/inbox/     # a few seconds later: ~/docling/outbox/<name>.json
-```
-
-Or convert by hand:
-
-```bash
-docling-convert ~/documents -o ~/converted --to json       # one-off batch, Docling's GPU models
-docling-convert scans/ --engine vlm --to md --to json      # granite-docling via vLLM
-```
-
-**[GUIDE.md](GUIDE.md) is the how-to for processing documents**: engines, formats, batch sizes, chunks for RAG, the Python API and troubleshooting.
-
-To see the plan first: `./docling-setup.sh --dry-run`. To preview a card you don't have: `DOCLING_GPU="RTX 4090:24564:575.64" ./docling-setup.sh --dry-run`.
 
 ## What it does
 
@@ -46,7 +47,8 @@ To see the plan first: `./docling-setup.sh --dry-run`. To preview a card you don
 | vLLM | `~/.docling-rtx/vllm`, a separate venv because vLLM pins its own torch. |
 | Models | granite-docling-258M (the `untied` revision the model card uses for vLLM, plus `main` for in-process use). Docling's layout/table/OCR models download on first use. |
 | Server | `vllm serve` with the RTX guide's settings (`--max-num-seqs 512 --max-num-batched-tokens 8192 --enable-chunked-prefill`), sized to the card: 0.5 of the GPU instead of 0.9 so the drop folder's standard pipeline fits alongside; under 10 GB, 32 parallel pages and 0.7 of the GPU; float16 on pre-RTX 30 cards, on `127.0.0.1:8000` only. Runs as the systemd unit `docling-vllm`, which starts on boot; without systemd it runs as a background process. |
-| Drop folder | The `docling-watch` service watches `~/docling/inbox` and writes `<name>.json` (a DoclingDocument) to `~/docling/outbox`, atomically, or `<name>.error.json` on failure. Changed files are converted again. The handover rules are in [GUIDE.md](GUIDE.md#0-the-drop-folder-the-main-workflow). |
+| Drop folder | The `docling-watch` service watches `~/docling/inbox` and writes `<name>.json` (a DoclingDocument) to `~/docling/outbox`, atomically, or `<name>.error.json` on failure. Changed files are converted again. The handover rules are in [GUIDE.md](GUIDE.md#0-the-web-page-and-the-drop-folder-the-main-workflow). |
+| Web page | `docling-web` (or a background process): drag & drop upload into the inbox, live progress from the watcher, downloads, retry. Python standard library only, on `127.0.0.1:8080` (`docling-rtx web public` for a direct link with a key). |
 | Test | `./docling-setup.sh test` converts the Docling paper with both engines into `~/.docling-rtx/test-output/`. |
 
 You don't need the CUDA Toolkit or cuDNN, steps 2-3 of the RTX guide: the PyTorch and vLLM wheels bundle the CUDA runtime and cuDNN. Only the driver matters.
@@ -58,18 +60,18 @@ You don't need the CUDA Toolkit or cuDNN, steps 2-3 of the RTX guide: the PyTorc
 ## Commands
 
 ```bash
-./docling-setup.sh                    # menu
-./docling-setup.sh install            # full install, no questions (--auto / -y)
+docling-rtx                           # menu (same as ./docling-setup.sh)
+docling-rtx install                   # full install, no questions (--auto / -y)
+docling-rtx howto                     # the web address and how to use it
+docling-rtx status                    # GPU, CUDA, vLLM / converter / web page up or down
+docling-rtx web [url|start|stop|logs|public|private]   # the web page
+docling-rtx watch start|stop|restart|logs              # the drop folder (logs = progress)
+docling-rtx start|stop|restart|logs   # the vLLM server
+docling-rtx test                      # convert the Docling paper with both engines
+docling-rtx uninstall                 # remove ~/.docling-rtx, commands and services (keeps your documents)
 ./docling-setup.sh --dry-run          # print the plan, change nothing
-./docling-setup.sh start|stop|restart # the vLLM server
-./docling-setup.sh status             # GPU, versions, CUDA yes/no, server up/down, GPU memory
-./docling-setup.sh test               # convert the Docling paper with both engines
-./docling-setup.sh logs               # vLLM server log
-./docling-setup.sh watch start|stop|restart|logs   # the drop folder
-./docling-setup.sh uninstall          # remove ~/.docling-rtx, launchers and the service
 
-docling-convert --help                # the batch converter (convert.py)
-docling --help                        # the plain Docling CLI, from the same venv
+docling-convert --help                # the converter, for one-off batches
 ```
 
 Settings live in `~/.docling-rtx/config.env` (menus 3 and 9): `PORT=8000`, `GPU_UTIL=auto`, `BATCH=auto` (64 for 32 GB, 32 for 24 GB, 16 below), `CUDA=auto`, `INBOX`, `OUTBOX`, `WATCH_ENGINE=standard` and `WATCH_FORMATS=json`.
@@ -80,12 +82,15 @@ Settings live in `~/.docling-rtx/config.env` (menus 3 and 9): `PORT=8000`, `GPU_
 
 | File | |
 |---|---|
-| [docling-setup.sh](docling-setup.sh) | Installer and menu |
+| [install.sh](install.sh) | One-line installer: clones the repo and runs the install |
+| [docling-setup.sh](docling-setup.sh) | Installer, menu and the `docling-rtx` command |
+| [web.py](web.py) | The web page (standard library only) |
 | [convert.py](convert.py) | Converter: files/folders/URLs, three engines (`standard`, `vlm`, `local`), `--watch` drop-folder mode, atomic writes, skips finished documents |
 | [GUIDE.md](GUIDE.md) | How to process documents once it's live |
 | [tools/termshot.py](tools/termshot.py) | Regenerates the screenshots (real whiptail in a pseudo-terminal) |
 
 ## Tested
+- **Web page (headless Chromium):** three files picked on the page uploaded into the inbox. The 40-page PDF showed live page progress and converted in 1m08s on a CPU-only sandbox. The CSV converted. The broken PDF showed "Not a readable PDF" with a working retry. Downloads, the zip, path-traversal attempts (404), the public key mode (403 without the key) and the no-systemd path (a simulated reboot, then services back at login) were all checked.
 
 - **Drop folder (same box, as the systemd service):** a PDF, CSV, DOCX, XLSX, HTML page and PNG were all converted to JSON. Tables came through as cells, the PNG was OCR'd, and the HTML list stayed a list. Edited files were converted again. A corrupt PDF produced `.error.json` once and wasn't retried. A file written in two parts ended up complete.
 - **CPU-only box (Debian 12, no GPU):** full `install`, then `test`. The standard engine converted the 8-page Docling paper in 36 s. `--engine local` (granite-docling in-process) and `--engine vlm` (against an OpenAI-compatible mock of the vLLM API) both produced Markdown. Reruns skip finished documents, and a corrupt PDF fails on its own without stopping the batch.

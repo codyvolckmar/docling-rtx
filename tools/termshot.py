@@ -331,7 +331,7 @@ if __name__ == '__main__':
     home = '/home/you'         # pretend home, so no local paths end up in the screenshots either
     path = ':'.join([os.path.expanduser('~/.local/bin'), os.environ.get('PATH', '/usr/bin:/bin')])
     base = dict(PATH=path, HOME=home, USER='you', TERM='xterm-256color', LANG='C.UTF-8', LC_ALL='C.UTF-8',
-                COLUMNS=str(COLS), LINES=str(ROWS), PS1='$ ', DOCLING_GPU='NVIDIA GeForce RTX 5090:32607:580.95')
+                COLUMNS=str(COLS), LINES=str(ROWS), PS1='$ ', DOCLING_GPU='NVIDIA GeForce RTX 5090:32607:580.95:12.0', DOCLING_NO_SYSTEMD='1')
     ENTER, DOWN, ESC, SPACE = '\r', '\x1b[B', '\x1b', ' '
     title = 'docling-setup.sh  (RTX 5090, 32 GB, preview)'
 

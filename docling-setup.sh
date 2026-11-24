@@ -3,8 +3,13 @@
 # Docling (PDF/Office/HTML/image -> Markdown/JSON/HTML) on CUDA PyTorch, plus IBM's granite-docling-258M
 # vision-language model served by vLLM (the fast path from Docling's RTX guide).
 #
+#   One-line install on a new machine:
+#     curl -fsSL https://raw.githubusercontent.com/codyvolckmar/docling-rtx/main/install.sh | bash
+#   After install the script is also the command  docling-rtx  (same subcommands):
 #   ./docling-setup.sh               whiptail menu
 #   ./docling-setup.sh install       full install, no questions (also: --auto, -y)
+#   ./docling-setup.sh howto         where the web page is and how to use it
+#   ./docling-setup.sh web [url|start|stop|logs|public|private]   drag & drop page (public = direct link + key)
 #   ./docling-setup.sh start|stop|restart|status|test|logs|uninstall      (the vLLM server)
 #   ./docling-setup.sh watch start|stop|logs   the drop folder: files put in INBOX come out as JSON in OUTBOX
 #   ./docling-setup.sh --dry-run     show what install would do, change nothing
@@ -26,14 +31,15 @@
 #   DOCLING_GPU="RTX 4090:24564:575.64"   pretend this GPU (name:MB:driver), for --dry-run previews
 set -euo pipefail
 
-VERSION=1.1.0
+VERSION=1.2.0
 MODEL=ibm-granite/granite-docling-258M
 MODEL_REV=untied   # the model card's vLLM example loads this branch (untied embedding weights)
 DOCLING_HOME=${DOCLING_HOME:-$HOME/.docling-rtx}
 CONF=$DOCLING_HOME/config.env
 LOG=$DOCLING_HOME/install.log
 SERVICE=docling-vllm
-SRC_DIR=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || pwd)
+SELF=$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "$0")   # resolves the ~/.local/bin/docling-rtx link
+SRC_DIR=$(cd "$(dirname "$SELF")" 2>/dev/null && pwd || pwd)
 REPO_RAW=${REPO_RAW:-https://raw.githubusercontent.com/codyvolckmar/docling-rtx/main}   # where to fetch convert.py when this script runs without the repo next to it
 TEST_URL=https://arxiv.org/pdf/2501.17887   # the Docling paper, as in the model card's examples
 export PATH="$HOME/.local/bin:$PATH" HF_HUB_DISABLE_TELEMETRY=1 DO_NOT_TRACK=1
@@ -59,7 +65,7 @@ need_whiptail() {   # minimal images (Docker, rented pods) don't ship it, and th
 wt() { whiptail --backtitle "Docling RTX setup $VERSION" "$@" 3>&1 1>&2 2>&3 </dev/tty; }
 
 load_conf() {   # environment beats config.env beats defaults
-  local p=${PORT:-} g=${GPU_UTIL:-} b=${BATCH:-} c=${CUDA:-} i=${INBOX:-} o=${OUTBOX:-} e=${WATCH_ENGINE:-} f=${WATCH_FORMATS:-}
+  local p=${PORT:-} g=${GPU_UTIL:-} b=${BATCH:-} c=${CUDA:-} i=${INBOX:-} o=${OUTBOX:-} e=${WATCH_ENGINE:-} f=${WATCH_FORMATS:-} wh=${WEB_HOST:-} wp=${WEB_PORT:-}
   if [ -f "$CONF" ]; then
     . "$CONF"
     # Config files from 1.1.0 (no CONF_VERSION) stored the computed GPU_UTIL/BATCH; go back to auto sizing.
@@ -70,11 +76,12 @@ load_conf() {   # environment beats config.env beats defaults
   PORT=${p:-${PORT:-8000}} GPU_UTIL=${g:-${GPU_UTIL:-auto}} BATCH=${b:-${BATCH:-auto}} CUDA=${c:-${CUDA:-auto}}
   INBOX=${i:-${INBOX:-$HOME/docling/inbox}} OUTBOX=${o:-${OUTBOX:-$HOME/docling/outbox}}
   WATCH_ENGINE=${e:-${WATCH_ENGINE:-standard}} WATCH_FORMATS=${f:-${WATCH_FORMATS:-json}}
+  WEB_HOST=${wh:-${WEB_HOST:-127.0.0.1}} WEB_PORT=${wp:-${WEB_PORT:-8080}}
 }
 save_conf() {
   mkdir -p "$DOCLING_HOME"
-  printf 'CONF_VERSION=2\nPORT=%s\nGPU_UTIL=%s\nBATCH=%s\nCUDA=%s\nINBOX="%s"\nOUTBOX="%s"\nWATCH_ENGINE=%s\nWATCH_FORMATS="%s"\n' \
-    "$PORT" "$GPU_UTIL" "$BATCH" "$CUDA" "$INBOX" "$OUTBOX" "$WATCH_ENGINE" "$WATCH_FORMATS" > "$CONF"
+  printf 'CONF_VERSION=2\nPORT=%s\nGPU_UTIL=%s\nBATCH=%s\nCUDA=%s\nINBOX="%s"\nOUTBOX="%s"\nWATCH_ENGINE=%s\nWATCH_FORMATS="%s"\nWEB_HOST=%s\nWEB_PORT=%s\n' \
+    "$PORT" "$GPU_UTIL" "$BATCH" "$CUDA" "$INBOX" "$OUTBOX" "$WATCH_ENGINE" "$WATCH_FORMATS" "$WEB_HOST" "$WEB_PORT" > "$CONF"
 }
 
 # --- detection -------------------------------------------------------------------------------------------
@@ -110,7 +117,7 @@ gpu_util() {      # share of VRAM vLLM takes; on small cards it needs a bigger s
   [ "$GPU_UTIL" != auto ] && { echo "$GPU_UTIL"; return; }
   if [ "${GPU_MB:-0}" -ge 10000 ]; then echo 0.5; else echo 0.7; fi
 }
-has_systemd() { [ -d /run/systemd/system ] && have systemctl; }
+has_systemd() { [ -z "${DOCLING_NO_SYSTEMD:-}" ] && [ -d /run/systemd/system ] && have systemctl; }
 
 # --- install steps ---------------------------------------------------------------------------------------
 step_preflight() {
@@ -183,21 +190,21 @@ print(f" ok docling {m.version('docling')}, torch {torch.__version__}, CUDA avai
 EOF
 }
 
-install_launchers() {
-  local src=$SRC_DIR/convert.py
-  if [ -f "$src" ]; then run cp "$src" "$DOCLING_HOME/convert.py"
-  elif [ -n "$REPO_RAW" ]; then run curl -fsSL "$REPO_RAW/convert.py" -o "$DOCLING_HOME/convert.py"
-  else warn "convert.py not found next to this script (set REPO_RAW=... to download it)."; fi
-  [ -f "$SRC_DIR/GUIDE.md" ] && run cp "$SRC_DIR/GUIDE.md" "$DOCLING_HOME/GUIDE.md"
-  run mkdir -p "$HOME/.local/bin"
+install_launchers() {   # app files into $DOCLING_HOME, so the commands keep working without the cloned repo
+  local f
+  run mkdir -p "$DOCLING_HOME" "$HOME/.local/bin"
+  for f in convert.py web.py GUIDE.md docling-setup.sh; do
+    if [ -f "$SRC_DIR/$f" ]; then [ "$SRC_DIR/$f" -ef "$DOCLING_HOME/$f" ] || run cp "$SRC_DIR/$f" "$DOCLING_HOME/$f"
+    elif [ -n "$REPO_RAW" ]; then run curl -fsSL "$REPO_RAW/$f" -o "$DOCLING_HOME/$f"
+    else warn "$f not found next to this script (set REPO_RAW=... to download it)."; fi
+  done
   [ "$DRY" = 1 ] && return
-  cat > "$HOME/.local/bin/docling-convert" <<EOF
-#!/bin/sh
-exec "$DOCLING_HOME/venv/bin/python" "$DOCLING_HOME/convert.py" "\$@"
-EOF
+  chmod +x "$DOCLING_HOME/docling-setup.sh"
+  printf '#!/bin/sh\nexec "%s" "%s" "$@"\n' "$DOCLING_HOME/venv/bin/python" "$DOCLING_HOME/convert.py" > "$HOME/.local/bin/docling-convert"
   chmod +x "$HOME/.local/bin/docling-convert"
   ln -sf "$DOCLING_HOME/venv/bin/docling" "$HOME/.local/bin/docling"
-  ok "Commands: docling-convert, docling (in ~/.local/bin)"
+  ln -sf "$DOCLING_HOME/docling-setup.sh" "$HOME/.local/bin/docling-rtx"
+  ok "Commands: docling-rtx (menu), docling-convert, docling (in ~/.local/bin)"
 }
 
 step_vllm() {
@@ -237,7 +244,7 @@ vllm_cmd() {
        "--enable-chunked-prefill --gpu-memory-utilization $(gpu_util)$dtype"
 }
 
-write_unit() {   # $1 name, $2 description, $3 ExecStart, $4 extra [Unit] lines
+write_unit() {   # $1 name, $2 description, $3 ExecStart, $4 extra [Unit] lines, $5 extra [Service] line
   local unit; unit="[Unit]
 Description=$2
 After=network-online.target
@@ -249,7 +256,8 @@ Environment=HF_HOME=${HF_HOME:-$HOME/.cache/huggingface}
 Environment=HF_HUB_DISABLE_TELEMETRY=1
 Environment=VLLM_NO_USAGE_STATS=1
 Environment=PYTHONUNBUFFERED=1
-ExecStart=$3
+${5:+$5
+}ExecStart=$3
 Restart=always
 RestartSec=10
 
@@ -267,70 +275,145 @@ step_service() {
     say "systemd service $SERVICE (starts on boot)"
     write_unit "$SERVICE" "granite-docling-258M on vLLM (Docling VLM server)" "$(vllm_cmd)" ""
   else
-    ok "No systemd here: the server runs as a background process (rerun 'start' after a reboot)."
+    ok "No systemd here: vLLM runs as a background process (started again at login)."
   fi
 }
 
-# --- drop folder: INBOX -> OUTBOX ------------------------------------------------------------------------
-WATCH=docling-watch
-watch_pidfile=$DOCLING_HOME/watch.pid
-watch_unit() { has_systemd && [ -f /etc/systemd/system/$WATCH.service ]; }
+# --- background services: the drop-folder watcher and the web page ----------------------------------------
+# systemd units where systemd runs; otherwise background processes with a pid file, restarted at login
+# (rented GPU pods are usually containers without systemd).
+svc_unit_file() { echo "/etc/systemd/system/docling-$1.service"; }
+svc_unit() { has_systemd && [ -f "$(svc_unit_file "$1")" ]; }
+svc_running() {   # $1 = watch | web
+  if svc_unit "$1"; then systemctl is-active -q "docling-$1"
+  else [ -f "$DOCLING_HOME/$1.pid" ] && kill -0 "$(cat "$DOCLING_HOME/$1.pid")" 2>/dev/null; fi
+}
+svc_start() {     # $1 name, $2 command
+  [ -x "$DOCLING_HOME/venv/bin/python" ] || { warn "Docling isn't installed (menu: Install)."; return 1; }
+  if svc_unit "$1"; then $SUDO systemctl restart "docling-$1"
+  else
+    svc_running "$1" && svc_stop "$1"
+    setsid nohup $2 >> "$DOCLING_HOME/$1.log" 2>&1 < /dev/null &
+    echo $! > "$DOCLING_HOME/$1.pid"
+  fi
+  sleep 2
+  svc_running "$1" || { warn "docling-$1 stopped right away. Log:"; svc_logs "$1" | tail -15; return 1; }
+}
+svc_stop() {
+  if svc_unit "$1"; then $SUDO systemctl stop "docling-$1"
+  elif [ -f "$DOCLING_HOME/$1.pid" ]; then kill "$(cat "$DOCLING_HOME/$1.pid")" 2>/dev/null || true; rm -f "$DOCLING_HOME/$1.pid"; fi
+  return 0
+}
+svc_logs() {
+  if svc_unit "$1"; then $SUDO journalctl -u "docling-$1" -n 200 --no-pager -o cat
+  else tail -n 200 "$DOCLING_HOME/$1.log" 2>/dev/null; fi
+}
+svc_setup() {     # $1 name, $2 description, $3 command, $4 extra [Unit] lines, $5 extra [Service] line
+  if has_systemd; then write_unit "docling-$1" "$2" "$3" "$4" "$5"; fi
+  if [ "$DRY" = 1 ]; then return 0; fi
+  svc_start "$1" "$3"
+}
+svc_remove() {
+  svc_stop "$1"
+  if svc_unit "$1"; then $SUDO systemctl disable -q "docling-$1"; $SUDO rm -f "$(svc_unit_file "$1")"; $SUDO systemctl daemon-reload; fi
+  return 0
+}
+
+# Drop folder: INBOX -> OUTBOX
 watch_cmd() {
   local f to=""
   for f in $WATCH_FORMATS; do to="$to --to $f"; done
   echo "$DOCLING_HOME/venv/bin/python $DOCLING_HOME/convert.py --watch $INBOX -o $OUTBOX$to" \
-       "--engine $WATCH_ENGINE --batch $(auto_batch) --server http://127.0.0.1:$PORT/v1/chat/completions"
+       "--engine $WATCH_ENGINE --batch $(auto_batch) --server http://127.0.0.1:$PORT/v1/chat/completions" \
+       "--status-file $DOCLING_HOME/watch-status.json"
 }
 step_watch() {
   say "Drop folder: $INBOX -> $OUTBOX ($WATCH_FORMATS, engine $WATCH_ENGINE)"
   run mkdir -p "$INBOX" "$OUTBOX"
-  if has_systemd; then
-    local after=""; [ "$WATCH_ENGINE" = vlm ] && after="Wants=$SERVICE.service
+  local after=""; [ "$WATCH_ENGINE" = vlm ] && after="Wants=$SERVICE.service
 After=$SERVICE.service"
-    write_unit "$WATCH" "Docling drop folder: $INBOX -> $OUTBOX" "$(watch_cmd)" "$after"
-  fi
-  [ "$DRY" = 1 ] || watch_start
+  svc_setup watch "Docling drop folder: $INBOX -> $OUTBOX" "$(watch_cmd)" "$after" "" || return 0
+  [ "$DRY" = 1 ] || ok "Watching $INBOX -> $OUTBOX"
 }
-watch_running() {
-  if watch_unit; then systemctl is-active -q $WATCH
-  else [ -f "$watch_pidfile" ] && kill -0 "$(cat "$watch_pidfile")" 2>/dev/null; fi
-}
-watch_start() {
-  [ -x "$DOCLING_HOME/venv/bin/python" ] || { warn "Docling isn't installed (menu: Install)."; return 1; }
-  mkdir -p "$INBOX" "$OUTBOX"
-  if watch_unit; then $SUDO systemctl restart $WATCH
-  else
-    watch_running && watch_stop >/dev/null
-    setsid nohup $(watch_cmd) >> "$DOCLING_HOME/watch.log" 2>&1 < /dev/null &
-    echo $! > "$watch_pidfile"
-  fi
-  sleep 2
-  if watch_running; then ok "Watching $INBOX -> $OUTBOX. Drop files in; JSON appears in the outbox."
-  else warn "The watcher stopped right away. Log:"; watch_logs | tail -15; return 1; fi
-}
-watch_stop() {
-  if watch_unit; then $SUDO systemctl stop $WATCH
-  elif [ -f "$watch_pidfile" ]; then kill "$(cat "$watch_pidfile")" 2>/dev/null || true; rm -f "$watch_pidfile"; fi
-  ok "Drop-folder watcher stopped"
-}
-watch_logs() {
-  if watch_unit; then $SUDO journalctl -u $WATCH -n 200 --no-pager -o cat; else tail -n 200 "$DOCLING_HOME/watch.log" 2>/dev/null; fi
-}
+watch_running() { svc_running watch; }
+watch_start() { mkdir -p "$INBOX" "$OUTBOX"; svc_start watch "$(watch_cmd)" && ok "Watching $INBOX -> $OUTBOX. Drop files in; JSON appears in the outbox."; }
+watch_stop() { svc_stop watch; ok "Drop-folder watcher stopped"; }
+watch_logs() { svc_logs watch; }
 watch_apply() {   # settings changed: rewrite the unit and restart, if the watcher is set up
-  if watch_unit; then step_watch
+  if svc_unit watch; then step_watch
   elif watch_running; then watch_start; fi
+}
+
+# Web page: drag & drop upload, live progress, downloads (web.py)
+web_cmd() {
+  echo "$DOCLING_HOME/venv/bin/python $DOCLING_HOME/web.py --inbox $INBOX --outbox $OUTBOX" \
+       "--status-file $DOCLING_HOME/watch-status.json --host $WEB_HOST --port $WEB_PORT --vllm-port $PORT"
+}
+web_token() {     # only when the page listens beyond localhost (docling-rtx web public)
+  [ "$WEB_HOST" = 127.0.0.1 ] && return 0
+  [ -s "$DOCLING_HOME/web.token" ] || ( umask 077; head -c 18 /dev/urandom | base64 | tr '+/' '-_' > "$DOCLING_HOME/web.token" )
+  cat "$DOCLING_HOME/web.token"
+}
+web_start() { DOCLING_WEB_TOKEN=$(web_token) svc_start web "$(web_cmd)"; }
+step_web() {
+  say "Web page on $WEB_HOST:$WEB_PORT (drag & drop, progress, downloads)"
+  local env=""
+  [ "$WEB_HOST" = 127.0.0.1 ] || { [ "$DRY" = 1 ] || env="Environment=DOCLING_WEB_TOKEN=$(web_token)"; }
+  if has_systemd; then write_unit docling-web "Docling RTX web page" "$(web_cmd)" "" "$env"; fi
+  [ "$DRY" = 1 ] || web_start || true
+  return 0
+}
+web_url() {
+  if [ "$WEB_HOST" = 127.0.0.1 ]; then echo "http://localhost:$WEB_PORT"
+  else echo "http://$(curl -fsS -m 4 https://api.ipify.org 2>/dev/null || hostname -I | cut -d' ' -f1):$WEB_PORT/?token=$(web_token)"; fi
+}
+autostart() {     # no systemd: bring everything back at login (hooked into ~/.bashrc by step_autostart)
+  if [ -x "$DOCLING_HOME/vllm/bin/vllm" ] && ! healthy && [ ! -f "$DOCLING_HOME/vllm.off" ]; then server_start >/dev/null 2>&1 || true; fi
+  svc_running watch || watch_start >/dev/null 2>&1 || true
+  svc_running web || web_start >/dev/null 2>&1 || true
+  return 0
+}
+step_autostart() {
+  has_systemd && return 0
+  grep -q "docling-rtx autostart" "$HOME/.bashrc" 2>/dev/null && return 0
+  say "No systemd: the services start again when you log in (hook in ~/.bashrc)"
+  [ "$DRY" = 1 ] && return 0
+  printf '\n# docling-rtx autostart: restarts the drop folder, web page and vLLM after a reboot (no systemd here)\n[ -x "$HOME/.local/bin/docling-rtx" ] && ( "$HOME/.local/bin/docling-rtx" autostart >/dev/null 2>&1 & )\n' >> "$HOME/.bashrc"
+}
+
+howto() {
+  local tunnel=""
+  [ "$WEB_HOST" = 127.0.0.1 ] && tunnel="
+  │    It listens on this server only. From your laptop, add  -L $WEB_PORT:127.0.0.1:$WEB_PORT  to the ssh
+  │    command you use for this server, e.g.  ssh -L $WEB_PORT:127.0.0.1:$WEB_PORT root@<server> -p <port>
+  │    and keep that ssh session open while you use the page."
+  cat <<EOF
+
+  ┌─ How to use ───────────────────────────────────────────────────────────────────────────────────────
+  │ 1. Web page (easiest): open $(web_url) in your browser$tunnel
+  │    Drag documents onto the page, watch the progress, download the JSON.
+  │
+  │ 2. Or copy files into   $INBOX
+  │    JSON appears in      $OUTBOX    (name.json = done, name.error.json = failed)
+  │
+  │ docling-rtx status        is everything running?
+  │ docling-rtx watch logs    what the converter is doing right now
+  │ docling-rtx               the menu          Guide: $DOCLING_HOME/GUIDE.md
+  └────────────────────────────────────────────────────────────────────────────────────────────────────
+EOF
 }
 
 # --- server control --------------------------------------------------------------------------------------
 pidfile=$DOCLING_HOME/vllm.pid
 healthy() { curl -fsS -m 3 "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1; }
-svc_unit() { has_systemd && [ -f /etc/systemd/system/$SERVICE.service ]; }
+vllm_unit() { has_systemd && [ -f /etc/systemd/system/$SERVICE.service ]; }
 
 server_start() {
   [ -x "$DOCLING_HOME/vllm/bin/vllm" ] || { warn "vLLM isn't installed (menu: Install)."; return 1; }
+  rm -f "$DOCLING_HOME/vllm.off"
   healthy && { ok "Already running on port $PORT"; return; }
   say "Starting vLLM on 127.0.0.1:$PORT (first start takes a minute or two: CUDA graphs are compiled)"
-  if svc_unit; then
+  if vllm_unit; then
     $SUDO systemctl restart $SERVICE
   else
     VLLM_NO_USAGE_STATS=1 setsid nohup $(vllm_cmd) > "$DOCLING_HOME/vllm.log" 2>&1 < /dev/null &
@@ -338,7 +421,7 @@ server_start() {
   fi
   for _ in $(seq 1 120); do
     healthy && { ok "vLLM is up: http://127.0.0.1:$PORT/v1 (model $MODEL)"; return; }
-    if ! svc_unit && ! kill -0 "$(cat "$pidfile" 2>/dev/null)" 2>/dev/null; then break; fi
+    if ! vllm_unit && ! kill -0 "$(cat "$pidfile" 2>/dev/null)" 2>/dev/null; then break; fi
     sleep 5
   done
   warn "vLLM didn't come up. The errors in its log (full log: $0 logs):"
@@ -347,12 +430,13 @@ server_start() {
   return 1
 }
 server_stop() {
-  if svc_unit; then $SUDO systemctl stop $SERVICE; ok "vLLM stopped"
+  [ -d "$DOCLING_HOME" ] && touch "$DOCLING_HOME/vllm.off"   # autostart leaves it off until 'start'
+  if vllm_unit; then $SUDO systemctl stop $SERVICE; ok "vLLM stopped"
   elif [ -f "$pidfile" ]; then kill "$(cat "$pidfile")" 2>/dev/null || true; rm -f "$pidfile"; ok "vLLM stopped"
   else ok "vLLM wasn't running"; fi
 }
 server_logs() {
-  if svc_unit; then $SUDO journalctl -u $SERVICE -n 200 --no-pager; else cat "$DOCLING_HOME/vllm.log" 2>/dev/null; fi
+  if vllm_unit; then $SUDO journalctl -u $SERVICE -n 200 --no-pager; else cat "$DOCLING_HOME/vllm.log" 2>/dev/null; fi
 }
 
 status() {
@@ -364,9 +448,10 @@ status() {
   else echo "Docling:  not installed"; fi
   [ -x "$DOCLING_HOME/vllm/bin/vllm" ] && echo "vLLM:     installed" || echo "vLLM:     not installed"
   if healthy; then echo "Server:   UP   http://127.0.0.1:$PORT/v1  ($MODEL)"; else echo "Server:   down (port $PORT)"; fi
-  svc_unit && echo "Service:  $SERVICE ($(systemctl is-enabled $SERVICE 2>/dev/null), starts on boot)"
+  vllm_unit && echo "Service:  $SERVICE ($(systemctl is-enabled $SERVICE 2>/dev/null), starts on boot)"
   if watch_running; then echo "Watcher:  UP   $INBOX -> $OUTBOX ($WATCH_FORMATS, engine $WATCH_ENGINE)"
   else echo "Watcher:  down ($INBOX -> $OUTBOX)"; fi
+  if svc_running web; then echo "Web page: UP   $(web_url)"; else echo "Web page: down (docling-rtx web start)"; fi
   echo "Settings: PORT=$PORT GPU_UTIL=$(gpu_util) BATCH=$(auto_batch) CUDA=$(cuda_flavor)"
   have nvidia-smi && nvidia-smi --query-gpu=memory.used,memory.total,utilization.gpu --format=csv,noheader | sed 's/^/GPU now:  /'
   return 0
@@ -388,22 +473,23 @@ test_run() {
 }
 
 uninstall() {
-  server_stop || true; watch_stop || true
-  if watch_unit; then $SUDO systemctl disable -q $WATCH; $SUDO rm -f /etc/systemd/system/$WATCH.service; $SUDO systemctl daemon-reload; fi
-  if svc_unit; then $SUDO systemctl disable -q $SERVICE; $SUDO rm -f /etc/systemd/system/$SERVICE.service; $SUDO systemctl daemon-reload; fi
+  server_stop || true; svc_remove watch; svc_remove web
+  rm -f "$HOME/.local/bin/docling-rtx"
+  if [ -f "$HOME/.bashrc" ]; then sed -i '/docling-rtx autostart/d' "$HOME/.bashrc"; fi
+  if vllm_unit; then $SUDO systemctl disable -q $SERVICE; $SUDO rm -f /etc/systemd/system/$SERVICE.service; $SUDO systemctl daemon-reload; fi
   rm -f "$HOME/.local/bin/docling-convert" "$HOME/.local/bin/docling"
   rm -rf "$DOCLING_HOME"
   ok "Removed $DOCLING_HOME, the launchers and the services. Kept: your inbox/outbox folders, uv, apt packages, the driver, ~/.cache/huggingface."
 }
 
-ALL_STEPS="preflight apt uv docling vllm models service watch"
+ALL_STEPS="preflight apt uv docling vllm models service watch web autostart"
 install_steps() {   # $@ = steps
   load_conf
   [ "$DRY" = 1 ] || save_conf
   for s in "$@"; do "step_$s"; done
   if [[ " $* " == *" service "* ]] && [ "$DRY" = 0 ] && [ -x "$DOCLING_HOME/vllm/bin/vllm" ]; then server_start || true; fi
   [ "$DRY" = 1 ] && { echo; ok "Dry run: nothing was changed."; return; }
-  echo; ok "Installed. Drop documents into $INBOX; JSON appears in $OUTBOX. Guide: $DOCLING_HOME/GUIDE.md"
+  echo; ok "Installed."; howto
   [[ ":$PATH:" == *":$HOME/.local/bin:"* ]] || warn "Open a new shell (or: export PATH=\$HOME/.local/bin:\$PATH)"
 }
 
@@ -420,7 +506,7 @@ menu_settings() {
       cu126 "CUDA 12.6 (driver >= 560)" "$([ "$CUDA" = cu126 ] && echo ON || echo OFF)" \
       cpu "CPU only" "$([ "$CUDA" = cpu ] && echo ON || echo OFF)") && CUDA=$v
   save_conf
-  if svc_unit; then step_service; wt --yesno "Settings saved. Restart vLLM now to apply them?" 8 60 && server_start_restart; fi
+  if vllm_unit; then step_service; wt --yesno "Settings saved. Restart vLLM now to apply them?" 8 60 && server_start_restart; fi
   watch_apply || true
 }
 server_start_restart() { server_stop; server_start; }
@@ -478,13 +564,13 @@ menu() {
       8 "Convert a folder once..." \
       9 "Settings (port, GPU memory, batch, CUDA)" \
       10 "vLLM server log" \
-      11 "How to process documents" \
+      11 "How to use it (web page, drop folder)" \
       12 "Uninstall") || { clear; exit 0; }
     clear
     case $c in
-      1) wt --yesno "Install:\n\n - system packages (apt)\n - uv + Python 3.12\n - Docling with CUDA PyTorch\n - vLLM + granite-docling-258M ($SERVICE service)\n - drop folder: $INBOX -> $OUTBOX\n   ($WATCH service)\n\nNeeds ~20 GB of disk and sudo. Continue?" 18 66 && { install_steps $ALL_STEPS; pause; } ;;
+      1) wt --yesno "Install:\n\n - system packages (apt)\n - uv + Python 3.12\n - Docling with CUDA PyTorch\n - vLLM + granite-docling-258M ($SERVICE service)\n - drop folder: $INBOX -> $OUTBOX\n - web page: drag & drop, progress, downloads\n\nNeeds ~20 GB of disk and sudo. Continue?" 18 66 && { install_steps $ALL_STEPS; pause; } ;;
       2) local picks
-         picks=$(wt --title "Components" --checklist "Space to toggle, Enter to install:" 19 76 9 \
+         picks=$(wt --title "Components" --checklist "Space to toggle, Enter to install:" 21 76 11 \
            driver "NVIDIA driver (Ubuntu, needs a reboot)" OFF \
            apt "System packages" ON \
            uv "uv (Python manager)" ON \
@@ -492,7 +578,9 @@ menu() {
            vllm "vLLM server engine" ON \
            models "Download granite-docling-258M" ON \
            service "Run vLLM as a service (systemd)" ON \
-           watch "Drop folder: inbox -> JSON (service)" ON) && { install_steps preflight $(echo "$picks" | tr -d '"'); pause; } ;;
+           watch "Drop folder: inbox -> JSON (service)" ON \
+           web "Web page: drag & drop, progress, downloads" ON \
+           autostart "Restart services at login (no-systemd pods)" ON) && { install_steps preflight $(echo "$picks" | tr -d '"'); pause; } ;;
       3) menu_watch ;;
       4) server_start || true; pause ;;
       5) server_stop; pause ;;
@@ -509,8 +597,7 @@ menu() {
              --to json --to md --server "http://127.0.0.1:$PORT/v1/chat/completions" || true; pause; } ;;
       9) menu_settings ;;
       10) server_logs | tail -60; pause ;;
-      11) local g=$DOCLING_HOME/GUIDE.md; [ -f "$g" ] || g=$SRC_DIR/GUIDE.md
-          if [ -f "$g" ]; then wt --title "GUIDE.md" --scrolltext --textbox "$g" 30 100; else wt --msgbox "GUIDE.md not found." 8 40; fi ;;
+      11) howto; pause ;;
       12) wt --yesno "Remove $DOCLING_HOME, the launchers and the services?\n(Kept: your inbox/outbox and the model cache.)" 10 64 && { uninstall; pause; } ;;
     esac
   done
@@ -543,6 +630,19 @@ case ${args[0]:-} in
       start) watch_start ;; stop) watch_stop ;; logs) watch_logs ;; restart) watch_stop; watch_start ;;
       *) die "Use: $0 watch start|stop|restart|logs" ;;
     esac ;;
+  web)
+    case ${args[1]:-url} in
+      start|restart) web_start && howto ;;
+      stop) svc_stop web; ok "Web page stopped" ;;
+      logs) svc_logs web ;;
+      url) howto ;;
+      public|private)   # public: all interfaces + a key in the link (pods that expose ports); private: SSH tunnel
+        if [ "${args[1]}" = public ]; then WEB_HOST=0.0.0.0; else WEB_HOST=127.0.0.1; fi
+        save_conf; svc_remove web; step_web; howto ;;
+      *) die "Use: $0 web [url|start|stop|logs|public|private]" ;;
+    esac ;;
+  howto|help) howto ;;
+  autostart) autostart ;;
   uninstall) uninstall ;;
   "")
     if [ "$DRY" = 1 ]; then install_steps $ALL_STEPS

@@ -2,7 +2,10 @@
 
 You ran `./docling-setup.sh` and the install finished. This guide covers the daily workflow: the drop folder, converting by hand, picking an engine and using the output.
 
-## 0. The drop folder (the main workflow)
+## 0. The web page and the drop folder (the main workflow)
+
+**The web page** is the easiest way in. Run `docling-rtx howto` on the server to get the address. Normally that's http://localhost:8080 through `ssh -L 8080:127.0.0.1:8080 ...`, or a direct link with a key after `docling-rtx web public`. Drag documents in, watch the progress bar, then click **json** or **Download all results (.zip)**. The page simply puts files into the inbox below and reads the outbox, so both ways work together.
+
 
 Put documents in **`~/docling/inbox`**. A structured JSON file for each one appears in **`~/docling/outbox`**. That's all there is to it.
 
