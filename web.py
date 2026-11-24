@@ -21,6 +21,7 @@ import time
 import urllib.parse
 import urllib.request
 import zipfile
+from urllib.parse import quote
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -61,30 +62,36 @@ def state():
     age = time.time() - st.get("updated", 0)
     watcher = "converting" if st.get("state") == "converting" and age < 600 else "watching" if age < 30 else "stopped"
     recent = {r["file"]: r for r in st.get("recent", [])}
+    cancel_dir = Path(A.status_file).expanduser().parent / "cancel"
     docs = []
     for src, rel in collect([str(inbox)], outbox) if inbox.is_dir() else []:
         outs = {f: target(outbox, rel, f) for f in ("json", "md", "html", "txt", "error.json")}
         mtime = src.stat().st_mtime
         fresh = {f: p for f, p in outs.items() if p.exists() and p.stat().st_mtime >= mtime}
-        name = src.name
-        if watcher == "converting" and st.get("file") == name:
+        name, key = src.name, str(src.relative_to(inbox))
+        if watcher == "converting" and st.get("key", st.get("file")) in (key, name):
             status = "converting"
         elif any(f != "error.json" for f in fresh):
             status = "done"
         elif "error.json" in fresh:
-            status = "failed"
+            try:
+                status = "cancelled" if json.loads(fresh["error.json"].read_text())["status"] == "cancelled" else "failed"
+            except Exception:
+                status = "failed"
         else:
             status = "waiting"
+        cancelling = (cancel_dir / quote(key, safe="")).exists() and status in ("converting", "waiting")
         r = recent.get(name, {})
-        docs.append({"name": str(src.relative_to(inbox)), "size": src.stat().st_size, "status": status,
+        docs.append({"name": key, "size": src.stat().st_size, "status": status, "cancelling": cancelling,
                      "pages": r.get("pages"), "seconds": r.get("seconds"), "error": r.get("error"),
                      "files": {f: str(p.relative_to(outbox)) for f, p in fresh.items()}, "mtime": mtime})
     docs.sort(key=lambda d: (d["status"] != "converting", d["status"] != "waiting", -d["mtime"]))
     cur = None
     if watcher == "converting":
-        cur = {k: st.get(k) for k in ("file", "pages_done", "pages_total", "started")}
+        cur = {k: st.get(k) for k in ("file", "key", "pages_done", "pages_total", "started")}
         cur["elapsed"] = time.time() - (st.get("started") or time.time())
     return {"watcher": watcher, "current": cur, "vllm": vllm_up(), "gpu": gpu(), "docs": docs,
+            "device": st.get("device"), "batch": A.batch,
             "inbox": str(inbox), "outbox": str(outbox)}
 
 
@@ -167,10 +174,18 @@ class H(BaseHTTPRequestHandler):
         os.replace(tmp, inbox / name)
         self.send(200, b"ok")
 
-    def do_POST(self):   # POST /retry/<inbox path>: touch the file so the watcher converts it again
+    def do_POST(self):   # /retry/<inbox path>: convert again; /cancel/<inbox path>: stop or skip it
         if not self.authed():
             return self.send(403, b"forbidden")
         path = urllib.parse.urlsplit(self.path).path
+        if path.startswith("/cancel/"):
+            p = self.safe(A.inbox, path[len("/cancel/"):])
+            if p and p.is_file():
+                d = Path(A.status_file).expanduser().parent / "cancel"
+                d.mkdir(parents=True, exist_ok=True)
+                key = str(p.relative_to(Path(A.inbox).expanduser().resolve()))
+                (d / quote(key, safe="")).touch()
+                return self.send(200, b"ok")
         if path.startswith("/retry/"):
             p = self.safe(A.inbox, path[len("/retry/"):])
             if p and p.is_file():
@@ -193,7 +208,9 @@ main{max-width:1000px;margin:0 auto;padding:24px}h1{font-size:22px;margin:0}head
 .bar{height:10px;background:var(--line);border-radius:99px;overflow:hidden;margin:10px 0 6px}.bar i{display:block;height:100%;background:var(--acc);transition:width .5s}
 table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
 th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line)}th{color:var(--dim);font-weight:500;font-size:13px}tr:last-child td{border:0}
-.st{font-size:13px;font-weight:600}.done{color:var(--ok)}.failed{color:var(--bad)}.waiting{color:var(--warn)}.converting{color:var(--acc)}
+.st{font-size:13px;font-weight:600}.done{color:var(--ok)}.failed{color:var(--bad)}.waiting{color:var(--warn)}.converting{color:var(--acc)}.cancelled{color:var(--dim)}
+.cpu{border-color:var(--bad);color:var(--bad)}.stop{border-color:#ff6b6b88;color:#ffb3b3}.stop:hover{background:#ff6b6b22}
+.curhead{display:flex;justify-content:space-between;align-items:center;gap:12px}
 a{color:var(--acc);text-decoration:none;margin-right:10px}a:hover{text-decoration:underline}.dim{color:var(--dim);font-size:13px}
 button{background:none;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:3px 10px;cursor:pointer}
 .row{display:flex;justify-content:space-between;align-items:center;margin:22px 0 10px}.err{color:var(--bad);font-size:12px;max-width:420px}
@@ -213,19 +230,24 @@ async function refresh(){
   let s; try{s=await (await fetch('/api/state')).json()}catch(e){return}
   const w={converting:['busy','converting'],watching:['on','watching the inbox'],stopped:['off','watcher stopped: run docling-rtx watch start']}[s.watcher];
   $('#pills').innerHTML=`<span class="pill"><span class="dot ${w[0]}"></span>${w[1]}</span>`+
+    (s.device=='cpu'?`<span class="pill cpu" title="PyTorch has no CUDA in the converter: run docling-rtx status">&#9888; converter on CPU (slow)</span>`:s.device=='cuda'?`<span class="pill"><span class="dot on"></span>converter on GPU</span>`:'')+
     `<span class="pill"><span class="dot ${s.vllm?'on':''}"></span>VLM server ${s.vllm?'up':'off'}</span>`+
     (s.gpu?`<span class="pill"><b>${esc(s.gpu.name)}</b> &middot; ${(s.gpu.used_mb/1024).toFixed(1)}/${(s.gpu.total_mb/1024).toFixed(0)} GB &middot; ${s.gpu.util}%</span>`:'<span class="pill">no GPU</span>');
   const c=s.current;
   if(c){const pct=c.pages_total?100*c.pages_done/c.pages_total:0, rate=c.pages_done/Math.max(c.elapsed,1);
     const left=c.pages_total&&c.pages_done?(c.pages_total-c.pages_done)/rate:null;
-    $('#cur').innerHTML=`<div class="cur"><b>Converting ${esc(c.file)}</b><div class="bar"><i style="width:${pct}%"></i></div>
-    <span class="dim">${c.pages_total?`page ${c.pages_done} of ${c.pages_total} &middot; `:'loading models / reading the file&hellip; &middot; '}${secs(c.elapsed)} so far${left!=null?` &middot; about ${secs(left)} left`:''}</span></div>`;
+    const d=s.docs.find(x=>x.status=='converting'), stopping=d&&d.cancelling;
+    const first=c.pages_total&&!c.pages_done?` &middot; the first ${Math.min(s.batch||8,c.pages_total)} pages go through all models together, so page 1 can take a while`:'';
+    $('#cur').innerHTML=`<div class="cur"><div class="curhead"><b>Converting ${esc(c.file)}</b>${d?`<button class="stop" ${stopping?'disabled':''} onclick="cancelDoc('${encodeURI(d.name)}')">${stopping?'Cancelling&hellip;':'Cancel'}</button>`:''}</div><div class="bar"><i style="width:${pct}%"></i></div>
+    <span class="dim">${c.pages_total?`page ${c.pages_done} of ${c.pages_total} &middot; `:'loading models / reading the file&hellip; &middot; '}${secs(c.elapsed)} so far${left!=null?` &middot; about ${secs(left)} left`:''}${first}</span></div>`;
   } else $('#cur').innerHTML='';
   $('#docs').innerHTML=s.docs.length?s.docs.map(d=>`<tr><td>${esc(d.name)}<br><span class="dim">${size(d.size)}</span></td>
     <td><span class="st ${d.status}">${d.status}</span>${d.status=='failed'&&d.error?`<div class="err" title="${esc(d.error)}">${esc(why(d.error))}</div>`:''}</td>
     <td>${d.pages||''}</td><td>${d.seconds==null?'':d.seconds<1?'&lt;1s':secs(d.seconds)}</td>
     <td>${Object.entries(d.files).filter(([f])=>f!='error.json').map(([f,p])=>`<a href="/files/${encodeURI(p)}">${f}</a>`).join('')}
-    ${d.status=='failed'?`<a href="/files/${encodeURI(d.files['error.json'])}">error</a><button onclick="retry('${encodeURI(d.name)}')">retry</button>`:''}</td></tr>`).join('')
+    ${d.status=='failed'?`<a href="/files/${encodeURI(d.files['error.json'])}">error</a>`:''}
+    ${d.status=='failed'||d.status=='cancelled'?`<button onclick="retry('${encodeURI(d.name)}')">${d.status=='cancelled'?'convert':'retry'}</button>`:''}
+    ${d.status=='converting'||d.status=='waiting'?`<button class="stop" ${d.cancelling?'disabled':''} onclick="cancelDoc('${encodeURI(d.name)}')">${d.cancelling?'cancelling&hellip;':'cancel'}</button>`:''}</td></tr>`).join('')
     :'<tr><td colspan="5" class="dim">No documents yet. Drop some above.</td></tr>';
   $('#paths').textContent=`Inbox: ${s.inbox}   Outbox: ${s.outbox}`;
 }
@@ -238,6 +260,8 @@ function why(e){  // plain-English reason for the common failures; the full text
   return e.length>160?e.slice(0,160)+'…':e;
 }
 async function retry(n){await fetch('/retry/'+n,{method:'POST'});refresh()}
+async function cancelDoc(n){if(!confirm('Stop converting '+decodeURI(n)+'?\nIts pages done so far are discarded. You can convert it again later.'))return;
+  await fetch('/cancel/'+n,{method:'POST'});refresh()}
 async function upload(files){
   for(const f of files){
     $('#up').innerHTML=`<div class="cur">Uploading <b>${esc(f.name)}</b> (${size(f.size)})&hellip;<div class="bar"><i id="ub" style="width:0"></i></div></div>`;
@@ -265,6 +289,7 @@ def main():
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--vllm-port", type=int, default=8000)
     ap.add_argument("--token", default=os.environ.get("DOCLING_WEB_TOKEN", ""))
+    ap.add_argument("--batch", type=int, default=0, help="the converter's batch size (shown while page 1 is pending)")
     A = ap.parse_args()
     if A.host not in ("127.0.0.1", "localhost", "::1") and not A.token:
         sys.exit("Listening beyond localhost needs a --token (or DOCLING_WEB_TOKEN).")

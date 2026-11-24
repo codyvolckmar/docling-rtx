@@ -263,7 +263,7 @@ Environment=PYTHONUNBUFFERED=1
 ${5:+$5
 }ExecStart=$3
 Restart=always
-RestartSec=10
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target"
@@ -297,7 +297,10 @@ svc_start() {     # $1 name, $2 command
   if svc_unit "$1"; then $SUDO systemctl restart "docling-$1"
   else
     svc_running "$1" && svc_stop "$1"
-    setsid nohup $2 >> "$DOCLING_HOME/$1.log" 2>&1 < /dev/null &
+    # A restart loop, like systemd's Restart=always: brings it back after a crash or a forced cancel (exit 75).
+    # setsid makes the loop a process group, so stopping kills the loop and the program together.
+    setsid nohup bash -c 'while :; do "$@"; [ $? = 0 ] && break; sleep 3; done' docling-$1 $2 \
+      >> "$DOCLING_HOME/$1.log" 2>&1 < /dev/null &
     echo $! > "$DOCLING_HOME/$1.pid"
   fi
   sleep 2
@@ -305,7 +308,11 @@ svc_start() {     # $1 name, $2 command
 }
 svc_stop() {
   if svc_unit "$1"; then $SUDO systemctl stop "docling-$1"
-  elif [ -f "$DOCLING_HOME/$1.pid" ]; then kill "$(cat "$DOCLING_HOME/$1.pid")" 2>/dev/null || true; rm -f "$DOCLING_HOME/$1.pid"; fi
+  elif [ -f "$DOCLING_HOME/$1.pid" ]; then
+    local pid; pid=$(cat "$DOCLING_HOME/$1.pid")
+    kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true   # the whole group (loop + program)
+    rm -f "$DOCLING_HOME/$1.pid"
+  fi
   return 0
 }
 svc_logs() {
@@ -351,7 +358,7 @@ watch_apply() {   # settings changed: rewrite the unit and restart, if the watch
 # Web page: drag & drop upload, live progress, downloads (web.py)
 web_cmd() {
   echo "$DOCLING_HOME/venv/bin/python $DOCLING_HOME/web.py --inbox $INBOX --outbox $OUTBOX" \
-       "--status-file $DOCLING_HOME/watch-status.json --host $WEB_HOST --port $WEB_PORT --vllm-port $PORT"
+       "--status-file $DOCLING_HOME/watch-status.json --host $WEB_HOST --port $WEB_PORT --vllm-port $PORT --batch $(auto_batch)"
 }
 web_token() {     # only when the page listens beyond localhost (docling-rtx web public)
   [ "$WEB_HOST" = 127.0.0.1 ] && return 0

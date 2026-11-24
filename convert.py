@@ -28,6 +28,7 @@ import os
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -93,6 +94,12 @@ class Progress:
 
     def __init__(self, path=None):
         self.path = Path(path).expanduser() if path else None
+        # Cancel requests (from web.py): one empty file per document, named after its inbox path, in <status dir>/cancel
+        self.cancel_dir = self.path.parent / "cancel" if self.path else None
+        self.opts = None            # the pipeline options of the running converter (cancel lowers their timeout)
+        self.key = None             # inbox path of the document being converted
+        self.cancelled = False
+        self.on_hard_cancel = None
         self.lock = threading.Lock()
         self.s = {"state": "idle", "file": None, "pages_done": 0, "pages_total": 0, "started": None,
                   "queue": [], "recent": []}
@@ -103,6 +110,42 @@ class Progress:
                 self.s["recent"] = json.loads(self.path.read_text())["recent"]
             except Exception:
                 pass
+        if self.cancel_dir:
+            threading.Thread(target=self._cancel_loop, daemon=True).start()
+
+    def _cancel_file(self, key):
+        return self.cancel_dir / urllib.parse.quote(key, safe="") if self.cancel_dir else None
+
+    def cancel_requested(self, key):
+        f = self._cancel_file(key)
+        return bool(f and f.exists())
+
+    def clear_cancel(self, key):
+        f = self._cancel_file(key)
+        if f:
+            f.unlink(missing_ok=True)
+
+    def _cancel_loop(self):
+        """Stop the running document when its cancel file appears. Soft first: Docling's own per-document timeout,
+        lowered to ~0, ends the conversion within a second or so and keeps the models loaded. If it hasn't stopped
+        after 30 s (a model call that never returns), exit: the service (or the restart loop) starts a fresh one."""
+        asked = None
+        while True:
+            time.sleep(0.5)
+            key = self.key
+            if not key or not self.cancel_requested(key):
+                asked = None
+                continue
+            if not self.cancelled:
+                self.cancelled, asked = True, time.time()
+                print(f"  ...   cancelling {key}", flush=True)
+                if self.opts is not None:
+                    self.opts.document_timeout = 0.001
+            elif asked and time.time() - asked > 30 and self.key == key:
+                print(f"  ...   {key} didn't stop within 30 s: restarting the converter", flush=True)
+                if self.on_hard_cancel:
+                    self.on_hard_cancel()
+                os._exit(75)
 
     def write(self, force=True):
         if not self.path or (not force and time.time() - self.written < 1):
@@ -116,15 +159,17 @@ class Progress:
             self.s["queue"] = names
             self.write()
 
-    def start(self, name, queue):
+    def start(self, name, queue, key=None, pages_total=0):
         with self.lock:
-            self.s.update(state="converting", file=name, pages_done=0, pages_total=0, started=time.time(), queue=queue)
+            self.key, self.cancelled = key, False
+            self.s.update(state="converting", file=name, key=key, pages_done=0, pages_total=pages_total,
+                          started=time.time(), queue=queue)
             self.logged_tenth, self.first = 0, None
             self.write()
 
     def __call__(self, ev):   # Docling's progress_callback
-        if type(ev).__name__ != "PageCompletedProgress":
-            return
+        if type(ev).__name__ != "PageCompletedProgress" or self.cancelled:
+            return   # after a cancel Docling reports the abandoned pages as completed: not progress
         with self.lock:
             s = self.s
             s["pages_done"], s["pages_total"] = ev.completed_pages, ev.total_pages
@@ -142,10 +187,11 @@ class Progress:
 
     def done(self, name, status, pages, secs, error=None):
         with self.lock:
+            self.key = None
             item = {"file": name, "status": status, "pages": pages, "seconds": round(secs, 1),
                     "finished": time.time(), "error": error}
             self.s["recent"] = [item] + [r for r in self.s["recent"] if r["file"] != name][:49]
-            self.s.update(state="idle", file=None, pages_done=0, pages_total=0, started=None)
+            self.s.update(state="idle", file=None, key=None, pages_done=0, pages_total=0, started=None)
             self.write()
 
 
@@ -154,7 +200,38 @@ def fmt_secs(t):
     return f"{t // 3600}h{t % 3600 // 60:02d}m" if t >= 3600 else f"{t // 60}m{t % 60:02d}s" if t >= 60 else f"{t}s"
 
 
+def page_count(src):
+    """Pages of a PDF, read in milliseconds (so the progress shows "page 0 of 412" right away); 0 if unknown."""
+    if isinstance(src, str) or src.suffix.lower() != ".pdf":
+        return 0
+    try:
+        import pypdfium2
+        doc = pypdfium2.PdfDocument(str(src))
+        try:
+            return len(doc)
+        finally:
+            doc.close()
+    except Exception:
+        return 0
+
+
 def build_converter(a, progress=None):
+    conv, opts = _build_converter(a, progress)
+    if progress is not None:
+        progress.opts = opts
+        try:
+            import torch
+            progress.s["device"] = ("cuda" if a.device in ("auto", "cuda") and torch.cuda.is_available() else "cpu")
+            if progress.s["device"] == "cuda":
+                progress.s["device_name"] = torch.cuda.get_device_name(0)
+        except Exception:
+            progress.s["device"] = "cpu"
+        print(f"Converter runs on: {progress.s['device'].upper()}" + (
+            "  (no CUDA: much slower; check 'docling-rtx status')" if progress.s["device"] == "cpu" else ""), flush=True)
+    return conv
+
+
+def _build_converter(a, progress=None):
     from docling.datamodel.accelerator_options import AcceleratorDevice, AcceleratorOptions
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.settings import settings
@@ -173,7 +250,7 @@ def build_converter(a, progress=None):
             opts.images_scale = 2.0
         fmt = {InputFormat.PDF: PdfFormatOption(pipeline_options=opts),
                InputFormat.IMAGE: ImageFormatOption(pipeline_options=opts)}
-        return DocumentConverter(format_options=fmt, progress_callback=progress)
+        return DocumentConverter(format_options=fmt, progress_callback=progress), opts
 
     from docling.datamodel.pipeline_options import VlmConvertOptions, VlmPipelineOptions
     from docling.pipeline.vlm_pipeline import VlmPipeline
@@ -197,7 +274,7 @@ def build_converter(a, progress=None):
         opts.generate_picture_images = True
     fmt = {InputFormat.PDF: PdfFormatOption(pipeline_cls=VlmPipeline, pipeline_options=opts),
            InputFormat.IMAGE: ImageFormatOption(pipeline_cls=VlmPipeline, pipeline_options=opts)}
-    return DocumentConverter(format_options=fmt, progress_callback=progress)
+    return DocumentConverter(format_options=fmt, progress_callback=progress), opts
 
 
 def main():
@@ -272,13 +349,27 @@ def convert_items(conv, todo, out, a, formats, progress):
     from docling_core.types.doc import ImageRefMode
 
     ok = failed = pages = 0
+    def cancelled(src, name, key, err_path, t0):
+        report = {"source": str(src), "status": "cancelled", "errors": ["Cancelled (web page)"],
+                  "time": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}
+        write_atomic(err_path, lambda p: p.write_text(json.dumps(report, indent=2), encoding="utf-8"))
+        progress.clear_cancel(key)
+        progress.done(name, "cancelled", 0, time.time() - t0, "Cancelled")
+        print(f"  STOP  {name}: cancelled", flush=True)
+
     for i, (src, rel) in enumerate(todo):
         name = src if isinstance(src, str) else src.name
+        key = name if isinstance(src, str) else str(rel.parent / src.name)   # its path inside the inbox
         err_path = target(out, rel, "error.json")
-        progress.start(name, [s if isinstance(s, str) else s.name for s, _ in todo[i + 1:]])
         t0 = time.time()
+        if progress.cancel_requested(key):   # cancelled while it was waiting
+            cancelled(src, name, key, err_path, t0)
+            continue
+        progress.start(name, [s if isinstance(s, str) else s.name for s, _ in todo[i + 1:]], key, page_count(src))
+        progress.on_hard_cancel = lambda: cancelled(src, name, key, err_path, t0)
         if len(todo) > 1 or a.watch:
-            print(f"  ...   {name}", flush=True)
+            print(f"  ...   {name}" + (f"  ({progress.s['pages_total']} pages)" if progress.s["pages_total"] else ""),
+                  flush=True)
         try:
             res = conv.convert(src, raises_on_error=False)
             errors = [e.error_message for e in res.errors]
@@ -286,6 +377,12 @@ def convert_items(conv, todo, out, a, formats, progress):
             status = res.status.value
         except Exception as e:   # a crash on one file must not stop the batch (or the watcher)
             res, good, status, errors = None, False, "failure", [f"{type(e).__name__}: {e}"]
+        finally:
+            if progress.opts is not None:
+                progress.opts.document_timeout = None   # undo a cancel
+        if progress.cancelled:
+            cancelled(src, name, key, err_path, t0)
+            continue
         if not good:
             failed += 1
             print(f"  FAIL  {name}: {'; '.join(errors) or status}", flush=True)

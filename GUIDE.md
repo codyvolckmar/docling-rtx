@@ -4,7 +4,7 @@ You ran `./docling-setup.sh` and the install finished. This guide covers the dai
 
 ## 0. The web page and the drop folder (the main workflow)
 
-**The web page** is the easiest way in. Run `docling-rtx howto` on the server to get the address. Normally that's http://localhost:8080 through `ssh -L 8080:127.0.0.1:8080 ...`, or a direct link with a key after `docling-rtx web public`. Drag documents in, watch the progress bar, then click **json** or **Download all results (.zip)**. The page simply puts files into the inbox below and reads the outbox, so both ways work together.
+**The web page** is the easiest way in. Run `docling-rtx howto` on the server to get the address. Normally that's http://localhost:8080 through `ssh -L 8080:127.0.0.1:8080 ...`, or a direct link with a key after `docling-rtx web public`. Drag documents in, watch the progress bar, then click **json** or **Download all results (.zip)**. The page simply puts files into the inbox below and reads the outbox, so both ways work together. **Cancel** stops the running document within a second or two, or skips a waiting one. It gets `name.error.json` with `"status": "cancelled"` and stays put until you click **convert**. The header shows whether the converter runs on the **GPU** or, in red, the **CPU**.
 
 
 Put documents in **`~/docling/inbox`**. A structured JSON file for each one appears in **`~/docling/outbox`**. That's all there is to it.
@@ -170,6 +170,7 @@ docling-convert scans/ --engine vlm      # on the laptop, with docling installed
 | `CUDA False` in status | Check `nvidia-smi`. If the driver is fine, the CPU torch wheel got installed: under menu, Settings, set CUDA to `cu128`, then reinstall Docling (menu 2, `docling` only). |
 | `No vLLM server answering` | `./docling-setup.sh start`. The first start takes 1-2 minutes. Then check `./docling-setup.sh logs`. |
 | vLLM: CUDA out of memory at start, or `No available memory for the cache blocks` | Another process holds the GPU (check `nvidia-smi`), or `GPU_UTIL` is too low for the card. Free the GPU, or raise `GPU_UTIL` (e.g. 0.8) under Settings. |
+| Web page says **converter on CPU (slow)**, or a big PDF sits at "page 0" with the GPU at 0% | PyTorch in the Docling venv can't use CUDA, usually because the build is newer than the driver. Run `docling-rtx status`: if it shows `CUDA False`, run `nvidia-smi` for the driver version, set CUDA to match under menu, Settings (cu128 for driver 570+, cu126 for 560+), then reinstall with `docling-rtx install`. |
 | Nothing appears in the outbox | `./docling-setup.sh watch logs`. Is the file type supported? Is it a hidden file? Is the watcher up (`status`)? |
 | Out of memory during `standard` runs | Lower `--batch`, or stop vLLM / lower `GPU_UTIL`. |
 | `Address already in use` | Something else is on port 8000. Change `PORT` in Settings and pass `--server http://127.0.0.1:PORT/v1/chat/completions`. |
