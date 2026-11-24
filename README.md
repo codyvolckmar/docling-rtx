@@ -10,7 +10,7 @@ Forked from [Summon](https://github.com/codyvolckmar/summon), keeping its approa
 
 ## Install
 
-Ubuntu 22.04/24.04 or Debian 12 (WSL 2 works too), an NVIDIA RTX GPU, ~20 GB of disk and sudo:
+Ubuntu 22.04/24.04 or Debian 12 (WSL 2 works too), an NVIDIA GPU (RTX recommended; a 6 GB GTX 1660 Ti runs it), ~20 GB of disk and sudo:
 
 ```bash
 git clone https://github.com/codyvolckmar/docling-rtx && cd docling-rtx
@@ -45,7 +45,7 @@ To see the plan first: `./docling-setup.sh --dry-run`. To preview a card you don
 | Docling | `~/.docling-rtx/venv`: CUDA PyTorch from download.pytorch.org, then `docling`. Prints whether CUDA is available. |
 | vLLM | `~/.docling-rtx/vllm`, a separate venv because vLLM pins its own torch. |
 | Models | granite-docling-258M (the `untied` revision the model card uses for vLLM, plus `main` for in-process use). Docling's layout/table/OCR models download on first use. |
-| Server | `vllm serve` with the RTX guide's settings (`--max-num-seqs 512 --max-num-batched-tokens 8192 --enable-chunked-prefill`), but with `--gpu-memory-utilization 0.5` instead of 0.9 so the drop folder's standard pipeline fits on the same card, on `127.0.0.1:8000` only. Runs as the systemd unit `docling-vllm`, which starts on boot; without systemd it runs as a background process. |
+| Server | `vllm serve` with the RTX guide's settings (`--max-num-seqs 512 --max-num-batched-tokens 8192 --enable-chunked-prefill`), sized to the card: 0.5 of the GPU instead of 0.9 so the drop folder's standard pipeline fits alongside; under 10 GB, 32 parallel pages and 0.7 of the GPU; float16 on pre-RTX 30 cards, on `127.0.0.1:8000` only. Runs as the systemd unit `docling-vllm`, which starts on boot; without systemd it runs as a background process. |
 | Drop folder | The `docling-watch` service watches `~/docling/inbox` and writes `<name>.json` (a DoclingDocument) to `~/docling/outbox`, atomically, or `<name>.error.json` on failure. Changed files are converted again. The handover rules are in [GUIDE.md](GUIDE.md#0-the-drop-folder-the-main-workflow). |
 | Test | `./docling-setup.sh test` converts the Docling paper with both engines into `~/.docling-rtx/test-output/`. |
 
@@ -72,7 +72,7 @@ docling-convert --help                # the batch converter (convert.py)
 docling --help                        # the plain Docling CLI, from the same venv
 ```
 
-Settings live in `~/.docling-rtx/config.env` (menus 3 and 9): `PORT=8000`, `GPU_UTIL=0.5`, `BATCH=auto` (64 for 32 GB, 32 for 24 GB, 16 below), `CUDA=auto`, `INBOX`, `OUTBOX`, `WATCH_ENGINE=standard` and `WATCH_FORMATS=json`.
+Settings live in `~/.docling-rtx/config.env` (menus 3 and 9): `PORT=8000`, `GPU_UTIL=auto`, `BATCH=auto` (64 for 32 GB, 32 for 24 GB, 16 below), `CUDA=auto`, `INBOX`, `OUTBOX`, `WATCH_ENGINE=standard` and `WATCH_FORMATS=json`.
 
 ![Status](docs/img/03-status.png)
 

@@ -93,7 +93,7 @@ Office, HTML and Markdown files skip the page models entirely, whatever the engi
 ## 4. Speed and GPU memory
 
 - `--batch N` sets how many pages are in flight. It defaults to 32 (`DOCLING_BATCH` env). Docling's guidance: RTX 5090 (32 GB) 64-128, RTX 4090 (24 GB) 32-64, 12 GB cards 16-32. For `--engine vlm`, a higher batch means more parallel requests to vLLM, which is where the throughput comes from.
-- vLLM reserves `GPU_UTIL` of the card. The default here is 0.5 (Docling's RTX guide uses 0.9), so the drop folder's `standard` engine fits on the same GPU. If you only use `--engine vlm`, raise it to 0.9 under menu, Settings. On 8-12 GB cards, lower it to 0.3, or stop the server (`./docling-setup.sh stop`) if you don't use the VLM.
+- vLLM's settings follow the card's memory (`GPU_UTIL=auto`). On 20 GB and up it uses the RTX guide's 512 parallel pages and takes 0.5 of the card, leaving room for the drop folder's `standard` engine. 10-20 GB cards get 128 pages. Under 10 GB (e.g. a 6 GB GTX 1660 Ti) it uses 32 pages, 4096-token batches and 0.7 of the card, and float16 on cards older than RTX 30. On a small card both engines barely fit together, so pick one: stop vLLM (`./docling-setup.sh stop`) if the drop folder uses `standard`, or switch the drop folder to `vlm`. If you only use `--engine vlm`, set `GPU_UTIL` to 0.9 under menu, Settings.
 - `--no-ocr` skips OCR for clean digital PDFs. That's faster, but scanned pages come out empty.
 - Watch the GPU with `nvidia-smi -l 1`. Low utilization during a big batch means you should raise `--batch`.
 
@@ -166,7 +166,7 @@ docling-convert scans/ --engine vlm      # on the laptop, with docling installed
 |---|---|
 | `CUDA False` in status | Check `nvidia-smi`. If the driver is fine, the CPU torch wheel got installed: under menu, Settings, set CUDA to `cu128`, then reinstall Docling (menu 2, `docling` only). |
 | `No vLLM server answering` | `./docling-setup.sh start`. The first start takes 1-2 minutes. Then check `./docling-setup.sh logs`. |
-| vLLM: CUDA out of memory at start | Another process holds the GPU (check `nvidia-smi`). Stop it or lower `GPU_UTIL`. |
+| vLLM: CUDA out of memory at start, or `No available memory for the cache blocks` | Another process holds the GPU (check `nvidia-smi`), or `GPU_UTIL` is too low for the card. Free the GPU, or raise `GPU_UTIL` (e.g. 0.8) under Settings. |
 | Nothing appears in the outbox | `./docling-setup.sh watch logs`. Is the file type supported? Is it a hidden file? Is the watcher up (`status`)? |
 | Out of memory during `standard` runs | Lower `--batch`, or stop vLLM / lower `GPU_UTIL`. |
 | `Address already in use` | Something else is on port 8000. Change `PORT` in Settings and pass `--server http://127.0.0.1:PORT/v1/chat/completions`. |

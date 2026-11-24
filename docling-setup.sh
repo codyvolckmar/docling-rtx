@@ -21,7 +21,7 @@
 # CUDA Toolkit and cuDNN steps of the Docling RTX guide are not needed.
 #
 # Settings (environment or $DOCLING_HOME/config.env; the menu edits the file):
-#   DOCLING_HOME=~/.docling-rtx  PORT=8000  GPU_UTIL=0.5  BATCH=auto  CUDA=auto (cu126|cu128|cu130|cpu)
+#   DOCLING_HOME=~/.docling-rtx  PORT=8000  GPU_UTIL=auto  BATCH=auto  CUDA=auto (cu126|cu128|cu130|cpu)
 #   INBOX=~/docling/inbox  OUTBOX=~/docling/outbox  WATCH_ENGINE=standard|vlm|local  WATCH_FORMATS="json"
 #   DOCLING_GPU="RTX 4090:24564:575.64"   pretend this GPU (name:MB:driver), for --dry-run previews
 set -euo pipefail
@@ -60,29 +60,34 @@ wt() { whiptail --backtitle "Docling RTX setup $VERSION" "$@" 3>&1 1>&2 2>&3 </d
 
 load_conf() {   # environment beats config.env beats defaults
   local p=${PORT:-} g=${GPU_UTIL:-} b=${BATCH:-} c=${CUDA:-} i=${INBOX:-} o=${OUTBOX:-} e=${WATCH_ENGINE:-} f=${WATCH_FORMATS:-}
-  if [ -f "$CONF" ]; then . "$CONF"; fi
-  # GPU_UTIL 0.5, not the RTX guide's 0.9: the 258M model needs little, and the drop-folder watcher's standard
-  # pipeline shares the card. Raise it if you only use the vlm engine.
-  PORT=${p:-${PORT:-8000}} GPU_UTIL=${g:-${GPU_UTIL:-0.5}} BATCH=${b:-${BATCH:-auto}} CUDA=${c:-${CUDA:-auto}}
+  if [ -f "$CONF" ]; then
+    . "$CONF"
+    # Config files from 1.1.0 (no CONF_VERSION) stored the computed GPU_UTIL/BATCH; go back to auto sizing.
+    [ -n "${CONF_VERSION:-}" ] || GPU_UTIL="" BATCH=""
+  fi
+  # GPU_UTIL auto (see gpu_util): 0.5 instead of the RTX guide's 0.9, because the 258M model needs little and the
+  # drop-folder watcher's standard pipeline shares the card; 0.7 on cards under 10 GB.
+  PORT=${p:-${PORT:-8000}} GPU_UTIL=${g:-${GPU_UTIL:-auto}} BATCH=${b:-${BATCH:-auto}} CUDA=${c:-${CUDA:-auto}}
   INBOX=${i:-${INBOX:-$HOME/docling/inbox}} OUTBOX=${o:-${OUTBOX:-$HOME/docling/outbox}}
   WATCH_ENGINE=${e:-${WATCH_ENGINE:-standard}} WATCH_FORMATS=${f:-${WATCH_FORMATS:-json}}
 }
 save_conf() {
   mkdir -p "$DOCLING_HOME"
-  printf 'PORT=%s\nGPU_UTIL=%s\nBATCH=%s\nCUDA=%s\nINBOX="%s"\nOUTBOX="%s"\nWATCH_ENGINE=%s\nWATCH_FORMATS="%s"\n' \
+  printf 'CONF_VERSION=2\nPORT=%s\nGPU_UTIL=%s\nBATCH=%s\nCUDA=%s\nINBOX="%s"\nOUTBOX="%s"\nWATCH_ENGINE=%s\nWATCH_FORMATS="%s"\n' \
     "$PORT" "$GPU_UTIL" "$BATCH" "$CUDA" "$INBOX" "$OUTBOX" "$WATCH_ENGINE" "$WATCH_FORMATS" > "$CONF"
 }
 
 # --- detection -------------------------------------------------------------------------------------------
-GPU_NAME="" GPU_MB="" DRIVER=""
+GPU_NAME="" GPU_MB="" DRIVER="" GPU_CC=""
 detect_gpu() {
   if [ -n "${DOCLING_GPU:-}" ]; then   # preview a card you don't have: DOCLING_GPU="RTX 4090:24564:575.64"
-    IFS=: read -r GPU_NAME GPU_MB DRIVER <<< "$DOCLING_GPU"; return
+    IFS=: read -r GPU_NAME GPU_MB DRIVER GPU_CC <<< "$DOCLING_GPU"; return   # optional 4th field: compute capability
   fi
   if have nvidia-smi && nvidia-smi >/dev/null 2>&1; then
     GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
     GPU_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1 | tr -d ' ')
     DRIVER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1)
+    GPU_CC=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ' || true)
   fi
 }
 cuda_flavor() {   # PyTorch wheel matching the driver (cu130 needs driver >= 580, cu128 >= 570, cu126 >= 560)
@@ -98,7 +103,12 @@ auto_batch() {    # Docling's RTX guide: 32 GB -> 64-128, 24 GB -> 32-64, 12 GB 
   [ "$BATCH" != auto ] && { echo "$BATCH"; return; }
   if   [ "${GPU_MB:-0}" -ge 30000 ]; then echo 64
   elif [ "${GPU_MB:-0}" -ge 20000 ]; then echo 32
-  else echo 16; fi
+  elif [ "${GPU_MB:-0}" -ge 10000 ]; then echo 16
+  else echo 8; fi
+}
+gpu_util() {      # share of VRAM vLLM takes; on small cards it needs a bigger share for its startup profiling run
+  [ "$GPU_UTIL" != auto ] && { echo "$GPU_UTIL"; return; }
+  if [ "${GPU_MB:-0}" -ge 10000 ]; then echo 0.5; else echo 0.7; fi
 }
 has_systemd() { [ -d /run/systemd/system ] && have systemctl; }
 
@@ -161,8 +171,8 @@ step_docling() {
   if [ -n "$have_build" ] && [ "$have_build" != "$flavor" ]; then
     say "Replacing torch +$have_build with +$flavor"; run uv pip uninstall -q torch torchvision
   fi
-  run uv pip install -q --upgrade torch torchvision --index-url "https://download.pytorch.org/whl/$flavor"
-  run uv pip install -q --upgrade docling
+  # One command with --torch-backend: installing docling separately would pull PyPI's default torch build over this one.
+  run uv pip install -q --upgrade torch torchvision docling --torch-backend="$flavor"
   unset VIRTUAL_ENV
   install_launchers
   [ "$DRY" = 1 ] && return
@@ -213,9 +223,18 @@ step_models() {
 }
 
 vllm_cmd() {
+  # Sized to the card. The RTX guide's 512 sequences x 8192 batched tokens is for 24-32 GB; on a 6 GB card the
+  # startup profiling run alone leaves no room for the KV cache ("_initialize_kv_caches" failure). The model needs
+  # ~23 KB of cache per token (30 layers x 3 KV heads x 64 dims, 16-bit), ~190 MB for a full 8K page.
+  detect_gpu
+  local seqs=512 tokens=8192 dtype=""
+  if   [ "${GPU_MB:-0}" -lt 10000 ]; then seqs=32 tokens=4096
+  elif [ "${GPU_MB:-0}" -lt 20000 ]; then seqs=128; fi
+  # No bfloat16 before Ampere (GTX 16 / RTX 20 are compute 7.5): run in float16.
+  if [ -n "$GPU_CC" ] && [ "${GPU_CC%%.*}" -lt 8 ]; then dtype=" --dtype half"; fi
   echo "$DOCLING_HOME/vllm/bin/vllm serve $MODEL --revision $MODEL_REV --served-model-name $MODEL" \
-       "--host 127.0.0.1 --port $PORT --max-num-seqs 512 --max-num-batched-tokens 8192" \
-       "--enable-chunked-prefill --gpu-memory-utilization $GPU_UTIL"
+       "--host 127.0.0.1 --port $PORT --max-model-len 8192 --max-num-seqs $seqs --max-num-batched-tokens $tokens" \
+       "--enable-chunked-prefill --gpu-memory-utilization $(gpu_util)$dtype"
 }
 
 write_unit() {   # $1 name, $2 description, $3 ExecStart, $4 extra [Unit] lines
@@ -323,7 +342,8 @@ server_start() {
     sleep 5
   done
   warn "vLLM didn't come up. The errors in its log (full log: $0 logs):"
-  server_logs | grep -aE "Error|ERROR|error:|out of memory|Python.h" | grep -avE "Engine core initialization failed|^\s*raise " | head -20
+  server_logs | grep -aE "[A-Za-z]+(Error|Exception): |out of memory|Python.h" \
+    | grep -avE "Engine core initialization failed|FA version 2" | tail -6
   return 1
 }
 server_stop() {
@@ -347,7 +367,7 @@ status() {
   svc_unit && echo "Service:  $SERVICE ($(systemctl is-enabled $SERVICE 2>/dev/null), starts on boot)"
   if watch_running; then echo "Watcher:  UP   $INBOX -> $OUTBOX ($WATCH_FORMATS, engine $WATCH_ENGINE)"
   else echo "Watcher:  down ($INBOX -> $OUTBOX)"; fi
-  echo "Settings: PORT=$PORT GPU_UTIL=$GPU_UTIL BATCH=$(auto_batch) CUDA=$(cuda_flavor)"
+  echo "Settings: PORT=$PORT GPU_UTIL=$(gpu_util) BATCH=$(auto_batch) CUDA=$(cuda_flavor)"
   have nvidia-smi && nvidia-smi --query-gpu=memory.used,memory.total,utilization.gpu --format=csv,noheader | sed 's/^/GPU now:  /'
   return 0
 }
@@ -391,7 +411,7 @@ install_steps() {   # $@ = steps
 menu_settings() {
   local v
   v=$(wt --title "Port" --inputbox "Port for the vLLM server (localhost only):" 9 60 "$PORT") && PORT=$v
-  v=$(wt --title "GPU memory" --inputbox "Share of GPU memory vLLM reserves (0.1-0.95).\n0.5 leaves room for the standard pipeline (drop folder) on the same card; 0.9 if you only use the vlm engine:" 11 70 "$GPU_UTIL") && GPU_UTIL=$v
+  v=$(wt --title "GPU memory" --inputbox "Share of GPU memory vLLM reserves (0.1-0.95), or auto (0.5; 0.7 under 10 GB).\n0.5 leaves room for the standard pipeline (drop folder) on the same card; 0.9 if you only use the vlm engine:" 12 76 "$GPU_UTIL") && GPU_UTIL=$v
   v=$(wt --title "Batch size" --inputbox "Pages in flight per conversion (auto = from VRAM: 64 for 32 GB, 32 for 24 GB, 16 below):" 10 70 "$BATCH") && BATCH=$v
   v=$(wt --title "PyTorch CUDA build" --radiolist "PyTorch wheel for Docling (auto = from your driver: $(cuda_flavor)):" 14 70 5 \
       auto "pick from the driver" "$([ "$CUDA" = auto ] && echo ON || echo OFF)" \
