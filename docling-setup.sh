@@ -208,7 +208,17 @@ install_launchers() {   # app files into $DOCLING_HOME, so the commands keep wor
   chmod +x "$HOME/.local/bin/docling-convert"
   ln -sf "$DOCLING_HOME/venv/bin/docling" "$HOME/.local/bin/docling"
   ln -sf "$DOCLING_HOME/docling-setup.sh" "$HOME/.local/bin/docling-rtx"
-  ok "Commands: docling-rtx (menu), docling-convert, docling (in ~/.local/bin)"
+  # ~/.local/bin isn't on PATH in many containers (often not for root): also link into /usr/local/bin when we
+  # can, otherwise put ~/.local/bin on PATH in ~/.bashrc.
+  local c
+  if [ -w /usr/local/bin ]; then
+    for c in docling-rtx docling-convert docling; do ln -sf "$HOME/.local/bin/$c" "/usr/local/bin/$c"; done
+    ok "Commands: docling-rtx (menu), docling-convert, docling (in /usr/local/bin)"
+  else
+    grep -qs 'HOME/.local/bin' "$HOME/.bashrc" ||
+      printf '\nexport PATH="$HOME/.local/bin:$PATH"   # docling-rtx commands\n' >> "$HOME/.bashrc"
+    ok "Commands: docling-rtx (menu), docling-convert, docling (in ~/.local/bin, on PATH in new shells)"
+  fi
 }
 
 step_vllm() {
@@ -504,6 +514,10 @@ test_run() {
 uninstall() {
   server_stop || true; svc_remove watch; svc_remove web
   rm -f "$HOME/.local/bin/docling-rtx"
+  local c
+  for c in docling-rtx docling-convert docling; do   # only our links
+    [ "$(readlink "/usr/local/bin/$c" 2>/dev/null)" = "$HOME/.local/bin/$c" ] && rm -f "/usr/local/bin/$c"
+  done
   if [ -f "$HOME/.bashrc" ]; then sed -i '/docling-rtx autostart/d' "$HOME/.bashrc"; fi
   if vllm_unit; then $SUDO systemctl disable -q $SERVICE; $SUDO rm -f /etc/systemd/system/$SERVICE.service; $SUDO systemctl daemon-reload; fi
   rm -f "$HOME/.local/bin/docling-convert" "$HOME/.local/bin/docling"
@@ -519,7 +533,9 @@ install_steps() {   # $@ = steps
   if [[ " $* " == *" service "* ]] && [ "$DRY" = 0 ] && [ -x "$DOCLING_HOME/vllm/bin/vllm" ]; then server_start || true; fi
   [ "$DRY" = 1 ] && { echo; ok "Dry run: nothing was changed."; return; }
   echo; ok "Installed."; howto
-  [[ ":$PATH:" == *":$HOME/.local/bin:"* ]] || warn "Open a new shell (or: export PATH=\$HOME/.local/bin:\$PATH)"
+  if ! [ -L /usr/local/bin/docling-rtx ] && [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+    warn "Open a new shell for the docling-rtx command (or run: export PATH=\$HOME/.local/bin:\$PATH)"
+  fi
 }
 
 # --- whiptail menu ---------------------------------------------------------------------------------------
