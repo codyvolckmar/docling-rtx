@@ -22,7 +22,16 @@ It runs for a few minutes and ends with a **How to use** box that has your web a
 ssh -L 8080:127.0.0.1:8080 root@<server> -p <port>      # keep this open while you use the page
 ```
 
-If your GPU host exposes ports and you'd rather have a direct link, run `docling-rtx web public`. It prints `http://<server-ip>:8080/?token=...`, protected by a random key. Plain HTTP, so use the SSH tunnel on untrusted networks.
+**Your provider gave you a port?** Most GPU pods expose only certain ports, often mapped to a different public number. Tell Docling RTX which one, at install or any time later:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/codyvolckmar/docling-rtx/main/install.sh | WEB_PORT=40123 WEB_PUBLIC=1 bash
+docling-rtx web port 40123             # change it later: the page listens on 40123
+docling-rtx web port 40123 41234       # ...and your provider maps 40123 to public port 41234
+docling-rtx web public | private       # direct link with a key / SSH tunnel only
+```
+
+Or use the menu: `docling-rtx`, Settings. Public mode prints `http://<server-ip>:<public port>/?token=...`, protected by a random key. On Vast.ai the public port is detected automatically. It's plain HTTP, so use the SSH tunnel on untrusted networks.
 
 **3. Drag documents onto the page.** Each one shows *waiting*, then *converting* with a page-by-page progress bar and time left, then *done* with a **json** link. Failures say why in plain English and have a **retry** button. **Download all results (.zip)** gets everything.
 
@@ -65,6 +74,7 @@ docling-rtx install                   # full install, no questions (--auto / -y)
 docling-rtx howto                     # the web address and how to use it
 docling-rtx status                    # GPU, CUDA, vLLM / converter / web page up or down
 docling-rtx web [url|start|stop|logs|public|private]   # the web page
+docling-rtx web port <port> [public port]              # its port (and the provider's public port)
 docling-rtx watch start|stop|restart|logs              # the drop folder (logs = progress)
 docling-rtx start|stop|restart|logs   # the vLLM server
 docling-rtx test                      # convert the Docling paper with both engines

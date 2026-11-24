@@ -10,6 +10,7 @@
 #   ./docling-setup.sh install       full install, no questions (also: --auto, -y)
 #   ./docling-setup.sh howto         where the web page is and how to use it
 #   ./docling-setup.sh web [url|start|stop|logs|public|private]   drag & drop page (public = direct link + key)
+#   ./docling-setup.sh web port 8080 [41234]   the page's port [and the public port your provider maps it to]
 #   ./docling-setup.sh start|stop|restart|status|test|logs|uninstall      (the vLLM server)
 #   ./docling-setup.sh watch start|stop|logs   the drop folder: files put in INBOX come out as JSON in OUTBOX
 #   ./docling-setup.sh --dry-run     show what install would do, change nothing
@@ -27,6 +28,7 @@
 #
 # Settings (environment or $DOCLING_HOME/config.env; the menu edits the file):
 #   DOCLING_HOME=~/.docling-rtx  PORT=8000  GPU_UTIL=auto  BATCH=auto  CUDA=auto (cu126|cu128|cu130|cpu)
+#   WEB_PORT=8080  WEB_PUBLIC=1 (direct link + key)  WEB_PUBLIC_PORT=  (set at install: curl ... | WEB_PORT=... bash)
 #   INBOX=~/docling/inbox  OUTBOX=~/docling/outbox  WATCH_ENGINE=standard|vlm|local  WATCH_FORMATS="json"
 #   DOCLING_GPU="RTX 4090:24564:575.64"   pretend this GPU (name:MB:driver), for --dry-run previews
 set -euo pipefail
@@ -44,6 +46,7 @@ REPO_RAW=${REPO_RAW:-https://raw.githubusercontent.com/codyvolckmar/docling-rtx/
 TEST_URL=https://arxiv.org/pdf/2501.17887   # the Docling paper, as in the model card's examples
 export PATH="$HOME/.local/bin:$PATH" HF_HUB_DISABLE_TELEMETRY=1 DO_NOT_TRACK=1
 DRY=0
+ME=$0; [ "$(basename "$0")" = docling-rtx ] && ME=docling-rtx   # how to name this command in messages
 
 # --- helpers ---------------------------------------------------------------------------------------------
 say()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
@@ -65,7 +68,8 @@ need_whiptail() {   # minimal images (Docker, rented pods) don't ship it, and th
 wt() { whiptail --backtitle "Docling RTX setup $VERSION" "$@" 3>&1 1>&2 2>&3 </dev/tty; }
 
 load_conf() {   # environment beats config.env beats defaults
-  local p=${PORT:-} g=${GPU_UTIL:-} b=${BATCH:-} c=${CUDA:-} i=${INBOX:-} o=${OUTBOX:-} e=${WATCH_ENGINE:-} f=${WATCH_FORMATS:-} wh=${WEB_HOST:-} wp=${WEB_PORT:-}
+  local p=${PORT:-} g=${GPU_UTIL:-} b=${BATCH:-} c=${CUDA:-} i=${INBOX:-} o=${OUTBOX:-} e=${WATCH_ENGINE:-} f=${WATCH_FORMATS:-} wh=${WEB_HOST:-} wp=${WEB_PORT:-} wpp=${WEB_PUBLIC_PORT:-}
+  [ "${WEB_PUBLIC:-}" = 1 ] && wh=0.0.0.0   # WEB_PUBLIC=1: direct link with a key (e.g. at install)
   if [ -f "$CONF" ]; then
     . "$CONF"
     # Config files from 1.1.0 (no CONF_VERSION) stored the computed GPU_UTIL/BATCH; go back to auto sizing.
@@ -76,12 +80,12 @@ load_conf() {   # environment beats config.env beats defaults
   PORT=${p:-${PORT:-8000}} GPU_UTIL=${g:-${GPU_UTIL:-auto}} BATCH=${b:-${BATCH:-auto}} CUDA=${c:-${CUDA:-auto}}
   INBOX=${i:-${INBOX:-$HOME/docling/inbox}} OUTBOX=${o:-${OUTBOX:-$HOME/docling/outbox}}
   WATCH_ENGINE=${e:-${WATCH_ENGINE:-standard}} WATCH_FORMATS=${f:-${WATCH_FORMATS:-json}}
-  WEB_HOST=${wh:-${WEB_HOST:-127.0.0.1}} WEB_PORT=${wp:-${WEB_PORT:-8080}}
+  WEB_HOST=${wh:-${WEB_HOST:-127.0.0.1}} WEB_PORT=${wp:-${WEB_PORT:-8080}} WEB_PUBLIC_PORT=${wpp:-${WEB_PUBLIC_PORT:-}}
 }
 save_conf() {
   mkdir -p "$DOCLING_HOME"
-  printf 'CONF_VERSION=2\nPORT=%s\nGPU_UTIL=%s\nBATCH=%s\nCUDA=%s\nINBOX="%s"\nOUTBOX="%s"\nWATCH_ENGINE=%s\nWATCH_FORMATS="%s"\nWEB_HOST=%s\nWEB_PORT=%s\n' \
-    "$PORT" "$GPU_UTIL" "$BATCH" "$CUDA" "$INBOX" "$OUTBOX" "$WATCH_ENGINE" "$WATCH_FORMATS" "$WEB_HOST" "$WEB_PORT" > "$CONF"
+  printf 'CONF_VERSION=2\nPORT=%s\nGPU_UTIL=%s\nBATCH=%s\nCUDA=%s\nINBOX="%s"\nOUTBOX="%s"\nWATCH_ENGINE=%s\nWATCH_FORMATS="%s"\nWEB_HOST=%s\nWEB_PORT=%s\nWEB_PUBLIC_PORT=%s\n' \
+    "$PORT" "$GPU_UTIL" "$BATCH" "$CUDA" "$INBOX" "$OUTBOX" "$WATCH_ENGINE" "$WATCH_FORMATS" "$WEB_HOST" "$WEB_PORT" "$WEB_PUBLIC_PORT" > "$CONF"
 }
 
 # --- detection -------------------------------------------------------------------------------------------
@@ -363,9 +367,22 @@ step_web() {
   [ "$DRY" = 1 ] || web_start || true
   return 0
 }
+valid_port() { [[ ${1:-} =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
+public_port() {   # the port the outside world uses: pod providers often map the pod's port to another one
+  local vast="VAST_TCP_PORT_$WEB_PORT"   # Vast.ai advertises its mapping in VAST_TCP_PORT_<internal port>
+  echo "${WEB_PUBLIC_PORT:-${!vast:-$WEB_PORT}}"
+}
+public_ip() {
+  echo "${PUBLIC_IPADDR:-${RUNPOD_PUBLIC_IP:-$(curl -fsS -m 4 https://api.ipify.org 2>/dev/null || hostname -I | cut -d' ' -f1)}}"
+}
 web_url() {
   if [ "$WEB_HOST" = 127.0.0.1 ]; then echo "http://localhost:$WEB_PORT"
-  else echo "http://$(curl -fsS -m 4 https://api.ipify.org 2>/dev/null || hostname -I | cut -d' ' -f1):$WEB_PORT/?token=$(web_token)"; fi
+  else echo "http://$(public_ip):$(public_port)/?token=$(web_token)"; fi
+}
+web_apply() {     # port or access changed: rewrite the service and restart it (if Docling is installed)
+  save_conf
+  if [ -x "$DOCLING_HOME/venv/bin/python" ]; then svc_remove web; step_web; fi
+  howto
 }
 autostart() {     # no systemd: bring everything back at login (hooked into ~/.bashrc by step_autostart)
   if [ -x "$DOCLING_HOME/vllm/bin/vllm" ] && ! healthy && [ ! -f "$DOCLING_HOME/vllm.off" ]; then server_start >/dev/null 2>&1 || true; fi
@@ -383,6 +400,11 @@ step_autostart() {
 
 howto() {
   local tunnel=""
+  [ "$WEB_HOST" != 127.0.0.1 ] && [ "$(public_port)" != "$WEB_PORT" ] && tunnel="
+  │    (the page listens on port $WEB_PORT in this machine; your provider maps it to $(public_port) outside)"
+  [ "$WEB_HOST" != 127.0.0.1 ] && [ "$(public_port)" = "$WEB_PORT" ] && tunnel="
+  │    Listening on port $WEB_PORT. If your provider maps it to another public port, set it:
+  │      docling-rtx web port $WEB_PORT <public port>"
   [ "$WEB_HOST" = 127.0.0.1 ] && tunnel="
   │    It listens on this server only. From your laptop, add  -L $WEB_PORT:127.0.0.1:$WEB_PORT  to the ssh
   │    command you use for this server, e.g.  ssh -L $WEB_PORT:127.0.0.1:$WEB_PORT root@<server> -p <port>
@@ -496,7 +518,17 @@ install_steps() {   # $@ = steps
 # --- whiptail menu ---------------------------------------------------------------------------------------
 menu_settings() {
   local v
-  v=$(wt --title "Port" --inputbox "Port for the vLLM server (localhost only):" 9 60 "$PORT") && PORT=$v
+  local old_web="$WEB_HOST:$WEB_PORT:$WEB_PUBLIC_PORT"
+  v=$(wt --title "Web page port" --inputbox "Port the web page listens on (your GPU provider may give you one):" 9 70 "$WEB_PORT") && valid_port "$v" && WEB_PORT=$v
+  v=$(wt --title "Web page access" --radiolist "How you reach the web page:" 12 78 2 \
+      private "SSH tunnel only (ssh -L ...), safest" "$([ "$WEB_HOST" = 127.0.0.1 ] && echo ON || echo OFF)" \
+      public "direct link http://IP:PORT with a key (provider-exposed port)" "$([ "$WEB_HOST" != 127.0.0.1 ] && echo ON || echo OFF)") &&
+    { [ "$v" = public ] && WEB_HOST=0.0.0.0 || WEB_HOST=127.0.0.1; }
+  if [ "$WEB_HOST" != 127.0.0.1 ]; then
+    v=$(wt --title "Public port" --inputbox "If your provider maps port $WEB_PORT to a different public port, enter it.\nLeave empty if it's the same (detected now: $(public_port)):" 10 76 "$WEB_PUBLIC_PORT") &&
+      { [ -z "$v" ] || valid_port "$v"; } && WEB_PUBLIC_PORT=$v
+  fi
+  v=$(wt --title "vLLM port" --inputbox "Port for the vLLM server (localhost only, nothing outside needs it):" 9 70 "$PORT") && valid_port "$v" && PORT=$v
   v=$(wt --title "GPU memory" --inputbox "Share of GPU memory vLLM reserves (0.1-0.95), or auto (0.5; 0.7 under 10 GB).\n0.5 leaves room for the standard pipeline (drop folder) on the same card; 0.9 if you only use the vlm engine:" 12 76 "$GPU_UTIL") && GPU_UTIL=$v
   v=$(wt --title "Batch size" --inputbox "Pages in flight per conversion (auto = from VRAM: 64 for 32 GB, 32 for 24 GB, 16 below):" 10 70 "$BATCH") && BATCH=$v
   v=$(wt --title "PyTorch CUDA build" --radiolist "PyTorch wheel for Docling (auto = from your driver: $(cuda_flavor)):" 14 70 5 \
@@ -508,6 +540,7 @@ menu_settings() {
   save_conf
   if vllm_unit; then step_service; wt --yesno "Settings saved. Restart vLLM now to apply them?" 8 60 && server_start_restart; fi
   watch_apply || true
+  if [ "$old_web" != "$WEB_HOST:$WEB_PORT:$WEB_PUBLIC_PORT" ]; then web_apply; pause; fi
 }
 server_start_restart() { server_stop; server_start; }
 
@@ -562,7 +595,7 @@ menu() {
       6 "Status" \
       7 "Run a test conversion" \
       8 "Convert a folder once..." \
-      9 "Settings (port, GPU memory, batch, CUDA)" \
+      9 "Settings (web port & access, GPU memory, batch, CUDA)" \
       10 "vLLM server log" \
       11 "How to use it (web page, drop folder)" \
       12 "Uninstall") || { clear; exit 0; }
@@ -628,7 +661,7 @@ case ${args[0]:-} in
   watch)
     case ${args[1]:-start} in
       start) watch_start ;; stop) watch_stop ;; logs) watch_logs ;; restart) watch_stop; watch_start ;;
-      *) die "Use: $0 watch start|stop|restart|logs" ;;
+      *) die "Use: $ME watch start|stop|restart|logs" ;;
     esac ;;
   web)
     case ${args[1]:-url} in
@@ -638,8 +671,13 @@ case ${args[0]:-} in
       url) howto ;;
       public|private)   # public: all interfaces + a key in the link (pods that expose ports); private: SSH tunnel
         if [ "${args[1]}" = public ]; then WEB_HOST=0.0.0.0; else WEB_HOST=127.0.0.1; fi
-        save_conf; svc_remove web; step_web; howto ;;
-      *) die "Use: $0 web [url|start|stop|logs|public|private]" ;;
+        web_apply ;;
+      port)   # web port <port the page listens on> [<public port your provider maps it to>]
+        valid_port "${args[2]:-}" || die "Use: $ME web port <port> [public port], e.g. $ME web port 8080 41234"
+        [ -z "${args[3]:-}" ] || valid_port "${args[3]}" || die "Not a port: ${args[3]}"
+        WEB_PORT=${args[2]} WEB_PUBLIC_PORT=${args[3]:-}
+        web_apply ;;
+      *) die "Use: $ME web [url|start|stop|logs|public|private|port <port> [public port]]" ;;
     esac ;;
   howto|help) howto ;;
   autostart) autostart ;;
