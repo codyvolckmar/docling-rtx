@@ -377,6 +377,7 @@ th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line)}th{c
 a{color:var(--acc);text-decoration:none;margin-right:10px}a:hover{text-decoration:underline}.dim{color:var(--dim);font-size:13px}
 button{background:none;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:3px 10px;cursor:pointer}
 button:disabled{opacity:.45;cursor:default}
+#docs td:nth-child(3),#docs td:nth-child(4),#docs td:nth-child(5){white-space:nowrap}#docs td:first-child{word-break:break-word}
 .filters{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 10px}.chip{border-radius:99px;font-size:13px;padding:3px 12px;color:var(--dim)}
 .chip b{font-weight:600;margin-left:4px;color:var(--text)}.chip.on{border-color:var(--acc);background:#5b9dff22;color:var(--text)}
 .row{display:flex;justify-content:space-between;align-items:center;margin:22px 0 10px}.err{color:var(--bad);font-size:12px;max-width:420px}

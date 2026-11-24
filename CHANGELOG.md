@@ -2,6 +2,11 @@
 
 All notable changes to Docling RTX. Install time on a fresh pod: **about 12 minutes**, mostly downloading CUDA PyTorch and Docling's models. Updating reruns the installer, which reuses everything already downloaded: `cd ~/docling-rtx && git pull && ./docling-setup.sh install`.
 
+## 1.4.3 (2026-11-24): new README
+
+- The README leads with the one-liner, the features and a screenshot of the web page; install options are in one table, and the reference material is folded away.
+- Web page: the time and results columns no longer wrap.
+
 ## 1.4.2 (2026-11-24): status filter
 
 - **Filter the document table by status:** All, Converting, Waiting, Done, Failed and Cancelled chips with live counts. Empty ones are greyed out, and the choice is kept across reloads.

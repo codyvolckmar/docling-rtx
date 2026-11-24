@@ -34,7 +34,7 @@
 #   DOCLING_GPU="RTX 4090:24564:575.64"   pretend this GPU (name:MB:driver), for --dry-run previews
 set -euo pipefail
 
-VERSION=1.4.2
+VERSION=1.4.3
 MODEL=ibm-granite/granite-docling-258M
 MODEL_REV=untied   # the model card's vLLM example loads this branch (untied embedding weights)
 DOCLING_HOME=${DOCLING_HOME:-$HOME/.docling-rtx}
