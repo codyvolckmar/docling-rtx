@@ -385,7 +385,7 @@ button:disabled{opacity:.45;cursor:default}
 <header><h1><img src="/logo.png" alt="" onerror="this.remove()">Docling RTX</h1><div class="pills" id="pills"></div></header>
 <div class="stats" id="stats"></div>
 <div id="share"></div>
-<div id="drop"><b>Drop files or folders here</b> or <a href="#" id="pf">choose files</a> &middot; <a href="#" id="pd">choose a folder</a><br><span class="dim">PDF, Word, Excel, PowerPoint, CSV, HTML, images, EPUB, email&hellip; Each one becomes structured JSON. Folders keep their layout.</span>
+<div id="drop"><b>Drop files or folders here</b> or <a href="#" id="pf">choose files</a> &middot; <a href="#" id="pd">choose a folder</a><br><span class="dim">PDF, Word, Excel, PowerPoint, CSV, HTML, images, EPUB, email&hellip; Each one becomes Markdown for your agent. Folders keep their layout.</span>
 <input type="file" id="pick" multiple hidden><input type="file" id="pickdir" webkitdirectory multiple hidden></div>
 <div id="up"></div><div id="cur"></div>
 <div class="row"><b>Documents</b><span><button id="clear" onclick="clearDone()" title="Move finished documents to the archive folder; their JSON stays in the outbox">Clear finished</button>

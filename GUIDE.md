@@ -7,11 +7,11 @@ You ran `./docling-setup.sh` and the install finished. This guide covers the dai
 **The web page** is the easiest way in. Run `docling-rtx howto` on the server to get the address. Normally that's http://localhost:8080 through `ssh -L 8080:127.0.0.1:8080 ...`, or a direct link with a key after `docling-rtx web public`. Drag documents in, watch the progress bar, then click **json** or **Download all results (.zip)**. The page simply puts files into the inbox below and reads the outbox, so both ways work together. **Cancel** stops the running document within a second or two, or skips a waiting one. It gets `name.error.json` with `"status": "cancelled"` and stays put until you click **convert**. The header shows whether the converter runs on the **GPU** or, in red, the **CPU**. **Clear finished** (or the × on a row) takes done, failed and cancelled documents off the list. Their originals move to `~/docling/archive/`, nothing is deleted, and their JSON stays in the outbox.
 
 
-Put documents in **`~/docling/inbox`**. A structured JSON file for each one appears in **`~/docling/outbox`**. That's all there is to it.
+Put documents in **`~/docling/inbox`**. A Markdown file for each one appears in **`~/docling/outbox`**, plus a structured JSON file if you tick `json` in the drop-folder menu. That's all there is to it.
 
 ```bash
 cp contracts/*.pdf prices.csv memo.docx ~/docling/inbox/
-ls ~/docling/outbox        # contract-a.json  prices.json  memo.json ...
+ls ~/docling/outbox        # contract-a.md  prices.md  memo.md ...
 ```
 
 The `docling-watch` service runs this. It starts on boot and scans the inbox every 2 seconds (uploads from the web page start at once), including subfolders, whose layout is mirrored in the outbox. Control it with `./docling-setup.sh watch start|stop|restart|logs`, or from menu 3, where you can also change the folders, output formats and engine.
@@ -20,8 +20,8 @@ The `docling-watch` service runs this. It starts on boot and scans the inbox eve
 
 **Rules for the agent that reads the outbox:**
 
-1. **A `.json` file in the outbox is always complete.** Files are written under a hidden temp name and then renamed, so the agent never sees a half-written file. Ignore files that start with `.`.
-2. **`name.json` = success.** It is a [DoclingDocument](https://docling-project.github.io/docling/concepts/docling_document/): text in reading order, headings, lists, tables as cells, page numbers and bounding boxes for PDFs.
+1. **A `.md` (or `.json`) file in the outbox is always complete.** Files are written under a hidden temp name and then renamed, so the agent never sees a half-written file. Ignore files that start with `.`.
+2. **`name.md` = success** (Markdown, the default). With JSON enabled, `name.json` is a [DoclingDocument](https://docling-project.github.io/docling/concepts/docling_document/): text in reading order, headings, lists, tables as cells, page numbers and bounding boxes for PDFs.
 3. **`name.error.json` = failure.** It holds `{"source", "status", "errors", "time"}`. A failed file is not retried until it changes. Drop a fixed version under the same name and the error file is removed once it converts.
 4. **Re-conversion:** if a source file changes (newer mtime), its JSON is rewritten. Deleting a source does not delete its JSON.
 5. **Copying big files in:** a file is converted once it stops changing (unchanged between scans, or untouched for 3 s). If a copy stalls for more than ~3 s, the file may be converted early and then again once complete. For big network copies, the safest way is to copy under a hidden name and then rename: `cp big.pdf inbox/.big.pdf && mv inbox/.big.pdf inbox/big.pdf`.

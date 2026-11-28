@@ -2,8 +2,8 @@
 
 <h1 align="center">Docling RTX</h1>
 
-<p align="center"><b>Turn any NVIDIA GPU box into a document → JSON machine, with one command.</b><br>
-Drop PDFs, Office files, CSVs, HTML, images or whole folders on a web page. Get structured JSON back for your AI agent.</p>
+<p align="center"><b>Turn any NVIDIA GPU box into a document → Markdown machine for AI agents, with one command.</b><br>
+Drop PDFs, Office files, CSVs, HTML, images or whole folders on a web page. Get clean Markdown back for your agent, with structured JSON as an option.</p>
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/codyvolckmar/docling-rtx/main/install.sh | bash
@@ -19,8 +19,8 @@ No `curl`? `wget -qO- https://raw.githubusercontent.com/codyvolckmar/docling-rtx
 
 - 🖱️ **Drag & drop web page:** files or whole folders (subfolders kept). Live page-by-page progress with time left, **cancel**, **retry**, a filter by status, and one-click JSON or a **zip of everything**.
 - 🌍 **Public link out of the box:** a free Cloudflare tunnel gives the page an `https://….trycloudflare.com` address, protected by a key. No account and no open port, so it works on rented pods that expose nothing.
-- 🤖 **JSON for AI agents:** every document becomes a [DoclingDocument](https://docling-project.github.io/docling/concepts/docling_document/) with text in reading order, headings, lists, tables as cells and page numbers. It's written atomically, so an agent never reads half a file. Failures write `name.error.json` with the reason.
-- 📂 **Drop folder too:** copy files into `~/docling/inbox`, and JSON appears in `~/docling/outbox`. It's the same pipeline as the web page.
+- 🤖 **Markdown for AI agents:** every document becomes compact Markdown, with headings, lists, tables and code in reading order, which is what LLMs read best. Optionally you also get **JSON** (a [DoclingDocument](https://docling-project.github.io/docling/concepts/docling_document/)) with page numbers, exact table cells and positions, for citations and programs. Files are written atomically, so an agent never reads half a file. Failures write `name.error.json` with the reason.
+- 📂 **Drop folder too:** copy files into `~/docling/inbox`, and Markdown appears in `~/docling/outbox`. It's the same pipeline as the web page.
 - ⚡ **GPU-accelerated:** [Docling](https://github.com/docling-project/docling)'s layout, table and OCR models on CUDA. Optionally, IBM's [granite-docling-258M](https://huggingface.co/ibm-granite/granite-docling-258M) vision model on vLLM for scans, formulas and code.
 - 📊 **Live CPU / RAM / GPU / VRAM widget,** measured against your pod's real limits, plus a badge showing whether the converter runs on GPU or CPU.
 - 🧰 **Made for rented GPU pods:** it picks the PyTorch build from your driver (525+), sizes everything to your VRAM, and runs without systemd. Services restart if they crash and come back after a reboot. Custom ports work, and Vast.ai and RunPod port mappings are detected.
@@ -38,6 +38,7 @@ Put options in front of `bash` in the one-liner, e.g. `curl -fsSL …/install.sh
 | `WEB_PUBLIC=1` | Also listen on all interfaces, for a direct `http://IP:PORT/?token=…` link on providers that expose ports. |
 | `WATCH_ENGINE=vlm` | Use the granite-docling vision model for everything. vLLM is installed (~12 GB more). Best for scans. |
 | `WITH_VLM=1` | Install vLLM up front but keep the standard engine (otherwise it installs on first use). |
+| `WATCH_FORMATS="md json"` | Output files per document: `md` (default), plus `json`, `html` or `txt`. |
 | `CUDA=cu126` | Force a PyTorch CUDA build (`cu126`, `cu128`, `cu130` or `cpu`) instead of picking it from the driver. |
 
 **Requirements:** Ubuntu 22.04/24.04 or Debian 12 (WSL 2 works), an NVIDIA GPU with driver 525+, ~8 GB of disk (20 GB with the VLM engine), and root or sudo. 16 GB+ of RAM is recommended for very long PDFs. You don't need the CUDA Toolkit: the PyTorch wheels bring their own CUDA runtime.
@@ -56,7 +57,7 @@ docling-rtx watch logs   # what the converter is doing (a line every 10% for lon
 
 Update to the latest version by running the one-liner again. It reuses everything already downloaded. What changed in each version is in the **[changelog](CHANGELOG.md)**.
 
-**Handing the JSON to an agent:** read `~/docling/outbox/**/*.json`, skip files starting with `.` and `*.error.json`, and treat everything else as complete. A Python snippet and the JSON layout are in **[GUIDE.md](GUIDE.md#0-the-web-page-and-the-drop-folder-the-main-workflow)**.
+**Handing the results to an agent:** read `~/docling/outbox/**/*.md`, skip files starting with `.`, and treat everything else as complete. Failures are `*.error.json`. Want JSON too (page numbers, exact tables)? Tick it in the menu (`docling-rtx`, then Drop folder), or install with `WATCH_FORMATS="md json"`. A Python snippet and the JSON layout are in **[GUIDE.md](GUIDE.md#0-the-web-page-and-the-drop-folder-the-main-workflow)**.
 
 <details>
 <summary><b>All commands</b></summary>

@@ -13,7 +13,7 @@
 #   ./docling-setup.sh web port 8080 [41234]   the page's port [and the public port your provider maps it to]
 #   ./docling-setup.sh web tunnel on|off      public https link through a Cloudflare quick tunnel (default: on)
 #   ./docling-setup.sh start|stop|restart|status|test|logs|uninstall      (the vLLM server)
-#   ./docling-setup.sh watch start|stop|logs   the drop folder: files put in INBOX come out as JSON in OUTBOX
+#   ./docling-setup.sh watch start|stop|logs   the drop folder: files put in INBOX come out as Markdown in OUTBOX
 #   ./docling-setup.sh --dry-run     show what install would do, change nothing
 #
 # What it installs (nothing outside these, apart from apt packages and the optional systemd unit):
@@ -30,11 +30,11 @@
 # Settings (environment or $DOCLING_HOME/config.env; the menu edits the file):
 #   DOCLING_HOME=~/.docling-rtx  PORT=8000  GPU_UTIL=auto  BATCH=auto  CUDA=auto (cu126|cu128|cu130|cpu)
 #   WEB_PORT=8080  WEB_PUBLIC=1 (direct link + key)  WEB_PUBLIC_PORT=  (set at install: curl ... | WEB_PORT=... bash)
-#   INBOX=~/docling/inbox  OUTBOX=~/docling/outbox  WATCH_ENGINE=standard|vlm|local  WATCH_FORMATS="json"
+#   INBOX=~/docling/inbox  OUTBOX=~/docling/outbox  WATCH_ENGINE=standard|vlm|local  WATCH_FORMATS="md" (or "md json")
 #   DOCLING_GPU="RTX 4090:24564:575.64"   pretend this GPU (name:MB:driver), for --dry-run previews
 set -euo pipefail
 
-VERSION=1.4.3
+VERSION=1.4.4
 MODEL=ibm-granite/granite-docling-258M
 MODEL_REV=untied   # the model card's vLLM example loads this branch (untied embedding weights)
 DOCLING_HOME=${DOCLING_HOME:-$HOME/.docling-rtx}
@@ -82,7 +82,7 @@ load_conf() {   # environment beats config.env beats defaults
   # drop-folder watcher's standard pipeline shares the card; 0.7 on cards under 10 GB.
   PORT=${p:-${PORT:-8000}} GPU_UTIL=${g:-${GPU_UTIL:-auto}} BATCH=${b:-${BATCH:-auto}} CUDA=${c:-${CUDA:-auto}}
   INBOX=${i:-${INBOX:-$HOME/docling/inbox}} OUTBOX=${o:-${OUTBOX:-$HOME/docling/outbox}}
-  WATCH_ENGINE=${e:-${WATCH_ENGINE:-standard}} WATCH_FORMATS=${f:-${WATCH_FORMATS:-json}}
+  WATCH_ENGINE=${e:-${WATCH_ENGINE:-standard}} WATCH_FORMATS=${f:-${WATCH_FORMATS:-md}}   # Markdown: what agents read best
   WEB_HOST=${wh:-${WEB_HOST:-127.0.0.1}} WEB_PORT=${wp:-${WEB_PORT:-8080}} WEB_PUBLIC_PORT=${wpp:-${WEB_PUBLIC_PORT:-}}
   WEB_TUNNEL=${wt:-${WEB_TUNNEL:-1}}   # 1 = public https link through a Cloudflare quick tunnel (key required)
 }
@@ -413,7 +413,7 @@ After=$SERVICE.service"
   [ "$DRY" = 1 ] || ok "Watching $INBOX -> $OUTBOX"
 }
 watch_running() { svc_running watch; }
-watch_start() { mkdir -p "$INBOX" "$OUTBOX"; svc_start watch "$(watch_cmd)" && ok "Watching $INBOX -> $OUTBOX. Drop files in; JSON appears in the outbox."; }
+watch_start() { mkdir -p "$INBOX" "$OUTBOX"; svc_start watch "$(watch_cmd)" && ok "Watching $INBOX -> $OUTBOX. Drop files in; Markdown appears in the outbox."; }
 watch_stop() { svc_stop watch; ok "Drop-folder watcher stopped"; }
 watch_logs() { svc_logs watch; }
 watch_apply() {   # settings changed: rewrite the unit and restart, if the watcher is set up
@@ -540,10 +540,10 @@ howto() {
 
   ┌─ How to use ───────────────────────────────────────────────────────────────────────────────────────
   │ 1. Web page (easiest): open $(web_url) in your browser$tunnel
-  │    Drag documents onto the page, watch the progress, download the JSON.
+  │    Drag documents onto the page, watch the progress, download the Markdown.
   │
   │ 2. Or copy files into   $INBOX
-  │    JSON appears in      $OUTBOX    (name.json = done, name.error.json = failed)
+  │    Results appear in    $OUTBOX    (name.md = done, name.error.json = failed)
   │
   │ docling-rtx status        is everything running?
   │ docling-rtx watch logs    what the converter is doing right now
@@ -728,9 +728,9 @@ menu_watch() {
       2) watch_stop; pause ;;
       3) v=$(wt --title "Inbox" --inputbox "Folder to watch (subfolders included):" 9 70 "$INBOX") && INBOX=$v
          v=$(wt --title "Outbox" --inputbox "Where the converted files go (keep it outside the inbox):" 9 78 "$OUTBOX") && OUTBOX=$v
-         v=$(wt --title "Output" --checklist "Files per document (JSON = DoclingDocument: text, tables, layout, reading order):" 14 78 4 \
-           json "structured JSON for agents/programs" "$([[ " $WATCH_FORMATS " == *" json "* ]] && echo ON || echo OFF)" \
-           md "Markdown (compact, LLM-friendly reading)" "$([[ " $WATCH_FORMATS " == *" md "* ]] && echo ON || echo OFF)" \
+         v=$(wt --title "Output" --checklist "Files per document (Markdown for agents to read; JSON adds page numbers, exact tables, positions):" 14 78 4 \
+           json "structured JSON (DoclingDocument) for programs/citations" "$([[ " $WATCH_FORMATS " == *" json "* ]] && echo ON || echo OFF)" \
+           md "Markdown: compact, what agents read best (default)" "$([[ " $WATCH_FORMATS " == *" md "* ]] && echo ON || echo OFF)" \
            html "HTML" "$([[ " $WATCH_FORMATS " == *" html "* ]] && echo ON || echo OFF)" \
            txt "plain text" "$([[ " $WATCH_FORMATS " == *" txt "* ]] && echo ON || echo OFF)") && v=$(echo "$v" | tr -d '"') && [ -n "$v" ] && WATCH_FORMATS=$v
          v=$(wt --title "Engine" --radiolist "How PDFs and images are read (Office/CSV/HTML don't need it):" 13 78 3 \
@@ -759,7 +759,7 @@ menu() {
     c=$(wt --title "Docling RTX setup" --default-item "$c" --menu "GPU: ${GPU_NAME:-none found}${GPU_MB:+ ($(((GPU_MB + 512) / 1024)) GB)}   vLLM: $up   Drop folder: $wst\n\nChoose:" 22 76 12 \
       1 "Install everything (recommended)" \
       2 "Choose what to install..." \
-      3 "Drop folder: inbox -> JSON..." \
+      3 "Drop folder: inbox -> Markdown..." \
       4 "Start vLLM server" \
       5 "Stop vLLM server" \
       6 "Status" \
@@ -781,7 +781,7 @@ menu() {
            vllm "vLLM server engine (for the vlm engine)" OFF \
            models "Download granite-docling-258M (vlm engine)" OFF \
            service "Run vLLM as a service (systemd)" OFF \
-           watch "Drop folder: inbox -> JSON (service)" ON \
+           watch "Drop folder: inbox -> Markdown (service)" ON \
            web "Web page: drag & drop, progress, downloads" ON \
            autostart "Restart services at login (no-systemd pods)" ON) && { install_steps preflight $(echo "$picks" | tr -d '"'); pause; } ;;
       3) menu_watch ;;

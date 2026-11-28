@@ -2,6 +2,10 @@
 
 All notable changes to Docling RTX. Install time on a fresh pod: **about 12 minutes**, mostly downloading CUDA PyTorch and Docling's models. Updating reruns the installer, which reuses everything already downloaded: `cd ~/docling-rtx && git pull && ./docling-setup.sh install`.
 
+## 1.4.4 (2026-11-28): Markdown by default
+
+- **New installs write Markdown (`name.md`)** instead of JSON. Markdown is what agents read best: about 8× fewer tokens than JSON, with headings, lists, tables and code intact. JSON (page numbers, exact table cells, positions) is one tick away in the drop-folder menu, or `WATCH_FORMATS="md json"` at install. Existing installs keep the formats they chose.
+
 ## 1.4.3 (2026-11-24): new README
 
 - The README leads with the one-liner, the features and a screenshot of the web page; install options are in one table, and the reference material is folded away.
